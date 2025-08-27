@@ -6,10 +6,40 @@
 
 generator client {
   provider = "prisma-client-js"
-  output   = "../generated/prisma"
 }
 
 datasource db {
   provider = "postgresql"
   url      = env("DATABASE_URL")
+}
+
+model User {
+  id                String   @id @default(uuid())
+  name              String
+  email             String   @unique
+  password          String
+  phoneNumber       String   @unique
+  status            UserStatus @default(ACTIVE)
+  roleId            String
+  role              Role     @relation(fields: [roleId], references: [id])
+  isDefaultPassword Boolean  @default(true)
+  OTP_number           String?
+  OTP_life_time        DateTime?
+  lastLogin         DateTime?
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+}
+
+model Role {
+  id            String   @id @default(uuid())
+  name          String   @unique  
+  created_at    DateTime @default(now())
+  updated_at    DateTime @updatedAt
+  users         User[]   // A Role can have many users
+}
+
+enum UserStatus {
+  ACTIVE
+  INACTIVE
+  SUSPENDED
 }

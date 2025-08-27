@@ -1,0 +1,101 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>CICMS Platform — Account Created</title>
+    <style>
+      body {
+        margin: 0;
+        padding: 0;
+        background-color: #f2f2f2;
+        font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+      }
+
+      .container {
+        max-width: 600px;
+        margin: 30px auto;
+        background-color: #ffffff;
+        border-radius: 8px;
+        overflow: hidden;
+        box-shadow: 0 4px 10px rgba(0, 0, 0, 0.1);
+      }
+
+      .header {
+        background-color: #0939e5ff;
+        text-align: center;
+        padding: 30px 20px;
+      }
+      .header img {
+        width: 100px;
+        height: auto;
+        display: block;
+        margin: 0 auto 10px;
+      }
+      .header h2 {
+        margin: 0;
+        font-size: 22px;
+        color: #ffffff;
+        letter-spacing: 1px;
+      }
+
+      .content {
+        padding: 30px 40px;
+        color: #333333;
+        line-height: 1.6;
+        font-size: 16px;
+      }
+      .content p {
+        margin-bottom: 16px;
+      }
+      .content ul {
+        margin: 16px 0;
+        padding-left: 20px;
+      }
+      .content li {
+        margin-bottom: 8px;
+      }
+
+      .footer {
+        background-color: #111111;
+        color: #ffffff;
+        text-align: center;
+        padding: 15px;
+        font-size: 12px;
+      }
+
+      @media only screen and (max-width: 600px) {
+        .content {
+          padding: 20px;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="container">
+      <div class="header">
+        <img src="cid:cicmslogo" alt="CICMS Logo" width="100" />
+        <h2>Construction Insurance Claim Management</h2>
+      </div>
+      <div class="content">
+        <p>Hello <strong>{{name}}</strong>,</p>
+        <p>
+          Welcome to <strong>Construction Insurance Claim Management</strong>!
+          Your user account has been created successfully.
+        </p>
+        <p><strong>Temporary Password:</strong> {{defaultPassword}}</p>
+        <p>Please note This:</p>
+        <ul>
+          <li>This is a <strong>temporary password</strong>.</li>
+          <li>You must change This Password on First Log in.</li>
+          <li>Use a strong, unique password.</li>
+        </ul>
+        <p>
+          If you have any questions or need support, feel free to contact us.
+        </p>
+        <p>Best regards,<br />SODIMEX Team</p>
+      </div>
+      <div class="footer">&copy; {{year}} SODIMEX. All rights reserved.</div>
+    </div>
+  </body>
+</html>
