@@ -23,17 +23,30 @@
 
       .header {
         background-color: #0939e5ff;
-        color: #ffffff;
         text-align: center;
         padding: 30px 20px;
       }
 
       .header img {
         width: 100px;
-        margin-bottom: 10px;
+        height: auto;
+        display: block;
+        margin: 0 auto 10px;
       }
 
-      
+      .header h2 {
+        margin: 10px 0 0;
+        font-size: 22px;
+        color: #ffffff;
+        letter-spacing: 1px;
+      }
+
+      .header h3 {
+        margin: 15px 0 0;
+        font-size: 18px;
+        color: #ffffff;
+        font-weight: normal;
+      }
 
       .content {
         padding: 30px 40px;
@@ -43,6 +56,7 @@
       .content p {
         line-height: 1.6;
         font-size: 16px;
+        margin-bottom: 16px;
       }
 
       .otp {
@@ -52,6 +66,10 @@
         color: #0939e5ff;
         margin: 20px 0;
         letter-spacing: 2px;
+        padding: 15px;
+        background-color: #f8f9fa;
+        border-radius: 6px;
+        border: 1px dashed #0939e5ff;
       }
 
       .note {
@@ -77,16 +95,23 @@
         .otp {
           font-size: 24px;
         }
+        
+        .header h2 {
+          font-size: 18px;
+        }
+        
+        .header h3 {
+          font-size: 16px;
+        }
       }
     </style>
   </head>
   <body>
     <div class="container">
       <div class="header">
-        <div class="header">
         <img src="cid:cicmslogo" alt="CICMS Logo" width="100" />
         <h2>Construction Insurance Claim Management</h2>
-        <h3>OTP Verification</h1>
+        <h3>OTP Verification</h3>
       </div>
       <div class="content">
         <p>Hello <strong>{{name}}</strong>,</p>

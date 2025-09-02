@@ -23,4 +23,8 @@ export class CreateUserDto {
   @IsNotEmpty()
   @IsUUID()
   roleId: string;
+
+  @IsUUID()
+  @IsOptional()
+  insuranceCompanyId?: string;
 }

@@ -4,6 +4,7 @@ import { CreateUserDto } from './dtos/CreateUserDtos';
 import * as bcrypt from 'bcrypt';
 import { renderTemplate } from 'src/emails/renderTemplates';
 import { sendEmail } from 'src/emails/send-email';
+import { Prisma } from '@prisma/client';
 
 @Injectable()
 export class UsersService {
@@ -47,6 +48,26 @@ export class UsersService {
         }
     }
 
+    // find role id by name "Contractor"
+    async getContractorRoleId(name: string) {
+        try {
+            const role = await this.prisma.role.findUnique({
+                where: { name: 'Contractor' },
+                select: { id: true },
+            });
+            if (!role) {
+                throw new BadRequestException('Role name "Contractor" does not exist.');
+            }
+            return role.id;
+        } catch (error) {
+            console.error('Error finding Contractor role:', error);
+            if (error instanceof BadRequestException) {
+                throw error;
+            }
+            throw new BadRequestException('Failed to find Contractor role.');
+        }
+    }
+
     // check if role id exists
     async checkRoleIdExists(roleId: string) {
         const existingRoleId = await this.prisma.role.findUnique({
@@ -69,17 +90,15 @@ export class UsersService {
         return password;
     }
 
-    async createUser(createUserDto: CreateUserDto) {
+    async CreateuserContractor(createUserDto: CreateUserDto) {
         try {
             // Check validations first
             await this.checkEmailExists(createUserDto.email);
             await this.checkPhoneNumberExists(createUserDto.phoneNumber);
-            await this.checkRoleIdExists(createUserDto.roleId);
+            const contractorRoleId = await this.getContractorRoleId('Contractor');
 
             const defaultPassword = await this.generateDefaultPassword();
             const hashedPassword = await bcrypt.hash(defaultPassword, 10);
-
-
 
             // Create user
             await this.prisma.user.create({
@@ -87,10 +106,11 @@ export class UsersService {
                     name: createUserDto.name,
                     email: createUserDto.email,
                     phoneNumber: createUserDto.phoneNumber,
-                    roleId: createUserDto.roleId,
+                    roleId: contractorRoleId,
                     password: hashedPassword,
                 }
             });
+
 
             // Prepare email content
             const html = renderTemplate('account-created.html', {
@@ -114,15 +134,65 @@ export class UsersService {
             return { message: `User created successfully. Temporary password: ${defaultPassword}` };
 
         } catch (error) {
-            console.error('Error creating user:', error);
+            console.error('Error creating contractor user:', error);
+            throw new BadRequestException('Failed to create contractor user. Please try again.');
 
-            // If it's already a known exception, re-throw it
-            if (error instanceof ConflictException || error instanceof BadRequestException) {
-                throw error;
-            }
-
-            // For unexpected errors, throw a generic bad request
-            throw new BadRequestException('Failed to create user. Please try again.');
         }
     }
+
+    async createUser(createUserDto: CreateUserDto) {
+    try {
+        // Validate email and phone
+        await this.checkEmailExists(createUserDto.email);
+        await this.checkPhoneNumberExists(createUserDto.phoneNumber);
+
+        // Fetch role and ensure it exists
+        const role = await this.prisma.role.findUnique({ where: { id: createUserDto.roleId } });
+        if (!role) {
+            throw new BadRequestException(`Role with ID ${createUserDto.roleId} does not exist.`);
+        }
+
+        // If the user is an insurance representative, ensure insuranceCompanyId is provided
+        if (role.name === 'Insurance Representative' && !createUserDto.insuranceCompanyId) {
+            throw new BadRequestException('Insurance representative must be assigned to an insurance company.');
+        }
+
+        // Generate default password
+        const defaultPassword = await this.generateDefaultPassword();
+        const hashedPassword = await bcrypt.hash(defaultPassword, 10);
+
+        // Create user using unchecked input to allow FK directly
+        const newUser = await this.prisma.user.create({
+            data: {
+                name: createUserDto.name,
+                email: createUserDto.email,
+                phoneNumber: createUserDto.phoneNumber,
+                roleId: createUserDto.roleId,
+                password: hashedPassword,
+                insuranceCompanyId: createUserDto.insuranceCompanyId ?? null,
+            } as Prisma.UserUncheckedCreateInput,
+        });
+
+        // Prepare and send email
+        const html = renderTemplate('account-created.html', {
+            name: createUserDto.name,
+            defaultPassword,
+            year: new Date().getFullYear(),
+        });
+
+        await sendEmail({
+            to: createUserDto.email,
+            subject: 'Your Account Has Been Created',
+            text: `Hello ${createUserDto.name}, Your account has been created. Temporary password: ${defaultPassword}`,
+            html,
+        });
+
+        return { message: `User created successfully. Temporary password: ${defaultPassword}`, userId: newUser.id };
+    } catch (error) {
+        console.error('Error creating user:', error);
+        if (error instanceof ConflictException || error instanceof BadRequestException) throw error;
+        throw new BadRequestException('Failed to create user. Please try again.');
+    }
+}
+
 }

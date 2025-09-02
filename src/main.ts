@@ -10,7 +10,14 @@ async function bootstrap() {
   app.useStaticAssets(join(__dirname, '..', 'src', 'images'), {
     prefix: '/images/',
   });
-  await app.listen(process.env.PORT ?? 3000);
+
+  app.enableCors({
+    origin: 'http://localhost:3000', // <-- Next.js frontend
+    credentials: true,
+  });
+
+  
+  await app.listen(process.env.PORT ?? 5000);
 
 }
 bootstrap();

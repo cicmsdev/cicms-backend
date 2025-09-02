@@ -14,21 +14,26 @@ datasource db {
 }
 
 model User {
-  id                String   @id @default(uuid())
-  name              String
-  email             String   @unique
-  password          String
-  phoneNumber       String   @unique
-  status            UserStatus @default(ACTIVE)
-  roleId            String
-  role              Role     @relation(fields: [roleId], references: [id])
-  isDefaultPassword Boolean  @default(true)
-  OTP_number           String?
-  OTP_life_time        DateTime?
-  lastLogin         DateTime?
-  createdAt         DateTime @default(now())
-  updatedAt         DateTime @updatedAt
+  id                 String             @id @default(uuid())
+  name               String
+  email              String             @unique
+  password           String
+  phoneNumber        String             @unique
+  status             UserStatus         @default(ACTIVE)
+  roleId             String
+  role               Role               @relation(fields: [roleId], references: [id])
+  insuranceCompanyId String?            
+  insuranceCompany   InsuranceCompany?  @relation(fields: [insuranceCompanyId], references: [companyId])
+  isDefaultPassword  Boolean            @default(true)
+  OTP_number         String?
+  OTP_life_time      DateTime?
+  lastLogin          DateTime?
+  createdAt          DateTime           @default(now())
+  updatedAt          DateTime           @updatedAt
+  @@map("users") 
+  Claim Claim[]
 }
+
 
 model Role {
   id            String   @id @default(uuid())
@@ -42,4 +47,76 @@ enum UserStatus {
   ACTIVE
   INACTIVE
   SUSPENDED
+}
+
+model InsuranceCompany {
+  companyId           String   @id @default(uuid())
+  name                String   @unique
+  email        String   @unique
+  policyNumberPrefix  String
+  isActive           Boolean  @default(true)
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+
+
+  // Relations
+  representatives    User[]  
+
+  Claim Claim[]
+}
+
+enum ClaimStatus {
+  SUBMITTED
+  IN_REVIEW
+  APPROVED
+  REJECTED
+}
+
+model Claim {
+  claimId        String          @id @default(uuid())
+  submissionDate DateTime        @default(now())
+  status         ClaimStatus     @default(SUBMITTED)
+  description    String?
+  
+  submittedById  String
+  submittedBy    User            @relation(fields: [submittedById], references: [id])
+  @@index([submittedById])
+ 
+  companyId      String
+  company        InsuranceCompany @relation(fields: [companyId], references: [companyId])
+  @@index([companyId])
+
+  
+  documents      Document[]
+
+  createdAt      DateTime        @default(now())
+  updatedAt      DateTime        @updatedAt
+
+  @@map("claims")
+}
+
+enum DocumentType {
+  REPORT
+  INVOICE
+  RECEIPT
+  CONTRACT
+  IMAGE
+  OTHER
+}
+
+model Document {
+  documentId   String       @id @default(uuid())  
+  documentType DocumentType
+  filePath     String
+  uploadDate   DateTime     @default(now())
+
+  
+  claimId      String
+  claim        Claim        @relation(fields: [claimId], references: [claimId])
+  @@index([claimId])
+
+  createdAt    DateTime     @default(now())
+  updatedAt    DateTime     @updatedAt
+
+  @@map("documents")
 }

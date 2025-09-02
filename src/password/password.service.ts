@@ -134,64 +134,64 @@ export class PasswordService {
         return { message: 'Password reset successfully and sent to user email' };
     }
 
-    // async resetUserPassword(userEmail: string, dto: ChangePasswordDto) {
-    //     const { old_password, new_password, confirm_new_password } = dto;
+    async resetUserPassword(userEmail: string, dto: ChangePasswordDto) {
+        const { old_password, new_password, confirm_new_password } = dto;
 
-    //     if (new_password !== confirm_new_password) {
-    //         throw new BadRequestException('New passwords do not match');
-    //     }
+        if (new_password !== confirm_new_password) {
+            throw new BadRequestException('New passwords do not match');
+        }
 
-    //     // Add this check to prevent using the same password
-    //     if (old_password === new_password) {
-    //         throw new BadRequestException(
-    //             'New password cannot be the same as old password',
-    //         );
-    //     }
-    //     const user = await this.prisma.user.findUnique({
-    //         where: { email: userEmail },
-    //     });
+        // Add this check to prevent using the same password
+        if (old_password === new_password) {
+            throw new BadRequestException(
+                'New password cannot be the same as old password',
+            );
+        }
+        const user = await this.prisma.user.findUnique({
+            where: { email: userEmail },
+        });
 
-    //     if (!user) {
-    //         throw new NotFoundException('User not found');
-    //     }
+        if (!user) {
+            throw new NotFoundException('User not found');
+        }
 
-    //     const isMatch = await bcrypt.compare(old_password, user.password);
+        const isMatch = await bcrypt.compare(old_password, user.password);
 
-    //     if (!isMatch) {
-    //         throw new BadRequestException('Old password is incorrect');
-    //     }
+        if (!isMatch) {
+            throw new BadRequestException('Old password is incorrect');
+        }
 
-    //     const hashedPassword = await bcrypt.hash(new_password, 10);
+        const hashedPassword = await bcrypt.hash(new_password, 10);
 
-    //     await this.prisma.user.update({
-    //         where: { email: userEmail },
-    //         data: {
-    //             password: hashedPassword,
-    //             isDefaultPassword: false,
-    //         },
-    //     });
+        await this.prisma.user.update({
+            where: { email: userEmail },
+            data: {
+                password: hashedPassword,
+                isDefaultPassword: false,
+            },
+        });
 
-    //     const html = renderTemplate('change-password.html', {
-    //         name: user.name,
-    //         year: new Date().getFullYear(),
-    //     });
+        const html = renderTemplate('change-password.html', {
+            name: user.name,
+            year: new Date().getFullYear(),
+        });
 
-    //     await sendEmail({
-    //         to: user.email,
-    //         subject: 'Password Changed Successfully',
-    //         text: `Hello  ${user.name},
+        await sendEmail({
+            to: user.email,
+            subject: 'Password Changed Successfully',
+            text: `Hello  ${user.name},
 
-    //             Your default password has been changed successfully before expiry.
+                Your default password has been changed successfully before expiry.
 
-    //             If this was not you, please contact our support team immediately.
+                If this was not you, please contact our support team immediately.
 
-    //             Thank you,
-    //             Support Team`,
-    //         html,
-    //     });
+                Thank you,
+                Support Team`,
+            html,
+        });
 
-    //     return { message: 'Password changed successfully' };
-    // }
+        return { message: 'Password changed successfully' };
+    }
 
     
 

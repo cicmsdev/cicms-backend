@@ -18,10 +18,10 @@ export class PasswordController {
     return this.passwordService.changePassword(dto.email, dto);
   }
 
-  // @Post('reset-password')
-  // async resetUserPassword(@Body() dto: ChangePasswordDto) {
-  //   return this.passwordService.resetUserPassword(dto.email, dto);
-  // }
+  @Post('reset-password')
+  async resetUserPassword(@Body() dto: ChangePasswordDto) {
+    return this.passwordService.resetUserPassword(dto.email, dto);
+  }
 
   @Post('reset')  
   async resetPassword(@Body() dto: ResetPasswordDto) {

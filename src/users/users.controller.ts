@@ -10,4 +10,9 @@ export class UsersController {
   create(@Body() createUserDto: CreateUserDto)  {
     return this.usersService.createUser(createUserDto);
   }
+
+  @Post('create-contractor')
+  createContractor(@Body() createUserDto: CreateUserDto) {
+    return this.usersService.CreateuserContractor(createUserDto);
+  }
 }

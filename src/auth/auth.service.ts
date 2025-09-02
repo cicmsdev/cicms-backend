@@ -20,6 +20,7 @@ export class AuthService {
         try {
             const user = await this.prisma.user.findUnique({
                 where: { email: email },
+                include: { role: true },
             });
             if (!user) {
                 throw new NotFoundException('User Not Found');
@@ -81,7 +82,9 @@ export class AuthService {
                 return {
                     message: 'Your password is default. Please change your password.',
                     userId: user.id,
+                    email: user.email, 
                     mustChangePassword: true,
+                    role: user.role.name,
                 };
             }
             // generate OTP if not default password
@@ -113,8 +116,10 @@ export class AuthService {
 
             return {
                 message: `Enter 6 digits we sent to ${maskedEmail}`,
-                userId: user.id,  // Also include userId here
-                mustChangePassword: false
+                userId: user.id,  
+                email: user.email, 
+                mustChangePassword: false,
+                role: user.role.name, 
             };
         } catch (error) {
             console.error('Error during login:', error);
