@@ -4,7 +4,9 @@ import { CreateUserDto } from './dtos/CreateUserDtos';
 import * as bcrypt from 'bcrypt';
 import { renderTemplate } from 'src/emails/renderTemplates';
 import { sendEmail } from 'src/emails/send-email';
-import { Prisma } from '@prisma/client';
+import { $Enums, Prisma } from '@prisma/client';
+import { CreateContractorDto } from './dtos/create-contractor.dto';
+import { ListEvaluatorsDto } from 'src/claim/dtos/list-evaluators.dto';
 
 @Injectable()
 export class UsersService {
@@ -90,11 +92,11 @@ export class UsersService {
         return password;
     }
 
-    async CreateuserContractor(createUserDto: CreateUserDto) {
+    async CreateuserContractor(dto: CreateContractorDto) {
         try {
             // Check validations first
-            await this.checkEmailExists(createUserDto.email);
-            await this.checkPhoneNumberExists(createUserDto.phoneNumber);
+            await this.checkEmailExists(dto.email);
+            await this.checkPhoneNumberExists(dto.phoneNumber);
             const contractorRoleId = await this.getContractorRoleId('Contractor');
 
             const defaultPassword = await this.generateDefaultPassword();
@@ -103,9 +105,9 @@ export class UsersService {
             // Create user
             await this.prisma.user.create({
                 data: {
-                    name: createUserDto.name,
-                    email: createUserDto.email,
-                    phoneNumber: createUserDto.phoneNumber,
+                    name: dto.name,
+                    email: dto.email,
+                    phoneNumber: dto.phoneNumber,
                     roleId: contractorRoleId,
                     password: hashedPassword,
                 }
@@ -114,7 +116,7 @@ export class UsersService {
 
             // Prepare email content
             const html = renderTemplate('account-created.html', {
-                name: createUserDto.name,
+                name: dto.name,
                 defaultPassword,
                 year: new Date().getFullYear(),
             });
@@ -122,9 +124,9 @@ export class UsersService {
             // Try to send email
             try {
                 await sendEmail({
-                    to: createUserDto.email,
+                    to: dto.email,
                     subject: 'Your Account Has Been Created',
-                    text: `Hello ${createUserDto.name}, Your account has been created. Temporary password: ${defaultPassword}`,
+                    text: `Hello ${dto.name}, Your account has been created. Temporary password: ${defaultPassword}`,
                     html,
                 });
             } catch (emailError) {
@@ -194,5 +196,10 @@ export class UsersService {
         throw new BadRequestException('Failed to create user. Please try again.');
     }
 }
+
+
+
+
+
 
 }

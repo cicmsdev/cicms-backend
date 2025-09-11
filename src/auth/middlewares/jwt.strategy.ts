@@ -1,21 +1,35 @@
-import { Injectable } from '@nestjs/common';
-import { PassportStrategy } from '@nestjs/passport';
-import { ExtractJwt, Strategy } from 'passport-jwt';
+// jwt.strategy.ts
+import { Injectable } from "@nestjs/common";
+import { PassportStrategy } from "@nestjs/passport";
+import { ExtractJwt, Strategy } from "passport-jwt";
+
+type JwtPayload = {
+  sub: string;
+  email: string;
+  name?: string;
+  role?: string;     // e.g., "Contractor"
+  roleId?: string;   // role FK
+  roleName?: string; // legacy/alt
+  role_id?: string;  // legacy/alt
+};
 
 @Injectable()
 export class JwtStrategy extends PassportStrategy(Strategy) {
   constructor() {
     super({
-      jwtFromRequest: ExtractJwt.fromAuthHeaderAsBearerToken(), // gets token from header
-      secretOrKey: process.env.JWT_SECRET, // load from .env
+      jwtFromRequest: ExtractJwt.fromAuthHeaderAsBearerToken(),
+      secretOrKey: process.env.JWT_SECRET!,
+      ignoreExpiration: false,
     });
   }
 
-  async validate(payload: any) {
+  async validate(payload: JwtPayload) {
     return {
-      userId: payload.sub,
+      sub: payload.sub,
       email: payload.email,
-      role_id: payload.role_id,
+      name: payload.name,
+      role: payload.role ?? payload.roleName,       // keep the role name too (handy if you later switch guard logic)
+      roleId: payload.roleId ?? payload.role_id,    // <-- your RolesGuard needs this
     };
   }
 }

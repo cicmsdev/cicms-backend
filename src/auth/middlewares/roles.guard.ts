@@ -1,4 +1,9 @@
-import { CanActivate, ExecutionContext, Injectable } from '@nestjs/common';
+import {
+  CanActivate,
+  ExecutionContext,
+  ForbiddenException,
+  Injectable,
+} from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
 import { ROLES_KEY } from './roles.decorator';
 import { RoleService } from 'src/role/role.service';
@@ -6,29 +11,45 @@ import { RoleService } from 'src/role/role.service';
 @Injectable()
 export class RolesGuard implements CanActivate {
   constructor(
-    private reflector: Reflector,
-    private readonly roleService: RoleService, // Inject RoleService
+    private readonly reflector: Reflector,
+    private readonly roleService: RoleService,
   ) {}
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
-    const requiredRoles = this.reflector.getAllAndOverride<string[]>(
-      ROLES_KEY,
-      [context.getHandler(), context.getClass()],
-    );
+    const requiredRoles =
+      this.reflector.getAllAndOverride<string[]>(ROLES_KEY, [
+        context.getHandler(),
+        context.getClass(),
+      ]) ?? [];
 
-    if (!requiredRoles) {
-      return true; // no @Roles() decorator found, allow access
+    if (requiredRoles.length === 0) return true;
+
+    const request = context.switchToHttp().getRequest();
+    const user = request.user as { sub?: string; role?: string; roleName?: string; roleId?: string };
+
+    if (!user?.sub) throw new ForbiddenException('Not authenticated');
+
+    // 1) Prefer role name from token (no DB hit)
+    const tokenRoleName =
+      (user.role ?? user.roleName ?? '').toString().trim();
+    if (tokenRoleName) {
+      const tokenRoleLc = tokenRoleName.toLowerCase();
+      const ok = requiredRoles.some((r) => r.toLowerCase() === tokenRoleLc);
+      if (ok) return true;
+      throw new ForbiddenException('Insufficient permissions');
     }
 
-    const { user } = context.switchToHttp().getRequest();
-
-    // Fetch the roles from the database based on the user's role_id
-    const userRole = await this.roleService.findById(user.role_id); // Use 'role_id' here
-
-    if (!userRole) {
-      return false; // No role found in DB, deny access
+    // 2) Fallback to roleId in token → lookup DB
+    if (!user.roleId) {
+      throw new ForbiddenException('User has no role assigned');
     }
 
-    return requiredRoles.includes(userRole.name); // Compare role name from DB with required roles
+    const userRole = await this.roleService.findById(user.roleId);
+    if (!userRole) throw new ForbiddenException('Role not found');
+
+    const ok = requiredRoles.includes(userRole.name);
+    if (!ok) throw new ForbiddenException('Insufficient permissions');
+
+    return true;
   }
 }

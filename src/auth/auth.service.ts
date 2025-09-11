@@ -1,4 +1,4 @@
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Injectable, NotFoundException, HttpException, InternalServerErrorException } from '@nestjs/common';
 import { DatabaseService } from 'src/database/database.service';
 import { JwtService } from '@nestjs/jwt';
 import { AuthDto } from './dtos/auth-user.dto';
@@ -28,8 +28,13 @@ export class AuthService {
 
             return user;
         } catch (error) {
-            console.error('Error creating user:', error);
-
+            console.error('Error finding user:', error);
+            
+            // If it's already an HttpException, re-throw it
+            if (error instanceof HttpException) {
+                throw error;
+            }
+            
             // For unexpected errors, throw a generic bad request
             throw new BadRequestException('Failed to find user. Please try again.');
         }
@@ -63,32 +68,33 @@ export class AuthService {
         return `${visible}${masked}@${domain}`;
     }
 
-
     // login
-    async login(autDto: AuthDto) {
+    async login(authDto: AuthDto) {
         try {
-            //  Find the user
-            const user = await this.findUserByEmail(autDto.email);
+            // Find the user
+            const user = await this.findUserByEmail(authDto.email);
 
             // validate user credentials here 
-            const isMatch = await bcrypt.compare(autDto.password, user.password);
+            const isMatch = await bcrypt.compare(authDto.password, user.password);
 
             if (!isMatch) {
                 throw new BadRequestException('Invalid credentials');
             }
 
-            //  If default password → force change
+            // If default password → force change
             if (user.isDefaultPassword) {
                 return {
                     message: 'Your password is default. Please change your password.',
                     userId: user.id,
-                    email: user.email, 
+                    email: user.email,
                     mustChangePassword: true,
                     role: user.role.name,
                 };
             }
+            
             // generate OTP if not default password
             const { OTP_number, otpValidityDuration } = await this.generateOTP(user.email);
+            
             // Prepare email content
             const html = renderTemplate('otp-verification.html', {
                 name: user.name,
@@ -96,6 +102,7 @@ export class AuthService {
                 validMinutes: otpValidityDuration,
                 year: new Date().getFullYear(),
             });
+            
             // Try to send email
             try {
                 await sendEmail({
@@ -116,72 +123,96 @@ export class AuthService {
 
             return {
                 message: `Enter 6 digits we sent to ${maskedEmail}`,
-                userId: user.id,  
-                email: user.email, 
+                userId: user.id,
+                email: user.email,
                 mustChangePassword: false,
-                role: user.role.name, 
+                role: user.role.name,
             };
         } catch (error) {
             console.error('Error during login:', error);
+            
+            // If it's already an HttpException, re-throw it to preserve the original message
+            if (error instanceof HttpException) {
+                throw error;
+            }
+            
             throw new BadRequestException('Login failed. Please try again.');
         }
     }
 
     // verify OTP
-    async verifyOTP(verifyOTP: VerifyOtpDto) {
+    async verifyOTP(dto: VerifyOtpDto) {
         try {
+            const user = await this.findUserByEmail(dto.email);
 
-            //  Find the user
-            const user = await this.findUserByEmail(verifyOTP.email);
+            const incoming = String(dto.otp).trim();
 
-            // Check if OTP matches and is still valid
-            if (user.OTP_number !== verifyOTP.otp) {
-                throw new BadRequestException('Invalid OTP. Please try again.');
-            }
-            if (!user.OTP_life_time || user.OTP_life_time < new Date()) {
-                throw new BadRequestException('OTP has expired. Please request a new one.');
+            // 1) Ensure the user actually has a role
+            if (!user.roleId) {
+                throw new BadRequestException("User has no role assigned. Contact admin.");
             }
 
-            // Clear OTP fields after successful verification
-            await this.prisma.user.update({
-                where: { email: verifyOTP.email },
+            // 2) Lookup role name (once)
+            const role = await this.prisma.role.findUnique({
+                where: { id: user.roleId },
+                select: { name: true },
+            });
+            if (!role?.name) {
+                throw new BadRequestException("User role not found.");
+            }
+
+            // 3) Atomically consume OTP (guards against reuse/race)
+            const now = new Date();
+            const consumed = await this.prisma.user.updateMany({
+                where: {
+                    email: dto.email,
+                    OTP_number: incoming,
+                    OTP_life_time: { gt: now },
+                },
                 data: {
                     OTP_number: null,
                     OTP_life_time: null,
+                    lastLogin: now,
                 },
             });
 
-            /* Fetch role name from Role table using role_id 
-            inorder to provide payload contain role name like 'Admin' 
-            for protecting needed page*/
-            const role = await this.prisma.role.findUnique({
-                where: { id: user.roleId },
-            });
+            if (consumed.count !== 1) {
+                // wrong OTP, expired, or already used
+                throw new BadRequestException("Invalid or expired OTP. Please try again.");
+            }
 
-            // Generate JWT token if no default password and OTP is valid
+            // 4) Sign JWT with BOTH role & roleId (matches your guard)
             const payload = {
                 sub: user.id,
                 email: user.email,
                 name: user.name,
-                role: role?.name , 
+                role: role.name,     // e.g., "Contractor"
+                roleId: user.roleId, // guard uses this
             };
 
-            const token = this.jwtService.sign(payload);
-            return { 
-                access_token: token,
-                message: 'OTP verified successfully'
+            const access_token = await this.jwtService.signAsync(payload, { expiresIn: "1d" });
+
+            return {
+                message: "OTP verified successfully",
+                access_token,
+                user: { id: user.id, email: user.email, name: user.name, role: role.name },
             };
         } catch (error) {
             console.error('Error during OTP verification:', error);
-            throw new BadRequestException('OTP verification failed. Please try again.');
-
+            
+            // If it's already an HttpException, re-throw it
+            if (error instanceof HttpException) {
+                throw error;
+            }
+            
+            throw new BadRequestException("OTP verification failed. Please try again.");
         }
     }
 
     // resend OTP
     async resendOTP(resendOtpDto: ResendOtpDto) {
         try {
-            //  Find the user
+            // Find the user
             const user = await this.findUserByEmail(resendOtpDto.email);
 
             // generate new OTP
@@ -219,10 +250,13 @@ export class AuthService {
             };
         } catch (error) {
             console.error('Error during resending OTP:', error);
+            
+            // If it's already an HttpException, re-throw it
+            if (error instanceof HttpException) {
+                throw error;
+            }
+            
             throw new BadRequestException('Resend OTP failed. Please try again.');
         }
     }
 }
-
-
-

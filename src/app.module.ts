@@ -7,9 +7,11 @@ import { RoleModule } from './role/role.module';
 import { AuthModule } from './auth/auth.module';
 import { PasswordModule } from './password/password.module';
 import { InsuranceModule } from './insurance/insurance.module';
+import { DocumentModule } from './document/document.module';
+import { ClaimModule } from './claim/claim.module';
 
 @Module({
-  imports: [DatabaseModule, UsersModule, RoleModule, AuthModule, PasswordModule, InsuranceModule],
+  imports: [DatabaseModule, UsersModule, RoleModule, AuthModule, PasswordModule, InsuranceModule, DocumentModule, ClaimModule],
   controllers: [AppController],
   providers: [AppService],
 })

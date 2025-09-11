@@ -31,7 +31,11 @@ model User {
   createdAt          DateTime           @default(now())
   updatedAt          DateTime           @updatedAt
   @@map("users") 
-  Claim Claim[]
+ 
+  submittedClaims    Claim[]            @relation("SubmittedBy")
+  assignedClaims     Claim[]            @relation("Evaluator")
+  uploadedDocuments  Document[]
+  activities         ClaimActivity[] @relation("ActivityPerformedBy")
 }
 
 
@@ -40,7 +44,7 @@ model Role {
   name          String   @unique  
   created_at    DateTime @default(now())
   updated_at    DateTime @updatedAt
-  users         User[]   // A Role can have many users
+  users         User[]   
 }
 
 enum UserStatus {
@@ -62,32 +66,41 @@ model InsuranceCompany {
   // Relations
   representatives    User[]  
 
-  Claim Claim[]
+  Claims  Claim[]
 }
 
 enum ClaimStatus {
-  SUBMITTED
-  IN_REVIEW
+  SUBMITTED  
   APPROVED
   REJECTED
+  IN_EVALUATION
+  RESOLVED
+  RESOLVED_IN_COURT
 }
 
 model Claim {
   claimId        String          @id @default(uuid())
   submissionDate DateTime        @default(now())
   status         ClaimStatus     @default(SUBMITTED)
-  description    String?
+  ClaimTitle     String
+  
   
   submittedById  String
-  submittedBy    User            @relation(fields: [submittedById], references: [id])
+  submittedBy    User            @relation("SubmittedBy", fields: [submittedById], references: [id])
   @@index([submittedById])
  
   companyId      String
   company        InsuranceCompany @relation(fields: [companyId], references: [companyId])
   @@index([companyId])
 
+  evaluatorId String?
+  evaluator   User?    @relation("Evaluator", fields: [evaluatorId], references: [id])
+  @@index([evaluatorId])
+
+
   
   documents      Document[]
+  activities  ClaimActivity[]
 
   createdAt      DateTime        @default(now())
   updatedAt      DateTime        @updatedAt
@@ -95,13 +108,27 @@ model Claim {
   @@map("claims")
 }
 
+model ClaimActivity {
+  id            String       @id @default(cuid())
+  claim         Claim        @relation(fields: [claimId], references: [claimId])
+  claimId       String
+  performedBy   User?        @relation("ActivityPerformedBy", fields: [performedById], references: [id])
+  performedById String?
+  action        String       // e.g. "STATUS_UPDATE"
+  fromStatus    ClaimStatus?
+  toStatus      ClaimStatus?
+  reason        String?
+  createdAt     DateTime     @default(now())
+
+  @@index([claimId, createdAt])
+}
+
 enum DocumentType {
-  REPORT
-  INVOICE
-  RECEIPT
-  CONTRACT
-  IMAGE
-  OTHER
+  DAMAGE_REPORT
+  POLICE_REPORT
+  SITE_INSPECTION_REPORT
+  LAND_OWNERSHIP_PROOF
+
 }
 
 model Document {
@@ -114,6 +141,11 @@ model Document {
   claimId      String
   claim        Claim        @relation(fields: [claimId], references: [claimId])
   @@index([claimId])
+
+  uploaderId  String
+  uploader    User         @relation(fields: [uploaderId], references: [id])
+  @@index([uploaderId])
+
 
   createdAt    DateTime     @default(now())
   updatedAt    DateTime     @updatedAt
