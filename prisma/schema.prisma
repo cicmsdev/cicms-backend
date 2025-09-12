@@ -36,6 +36,10 @@ model User {
   assignedClaims     Claim[]            @relation("Evaluator")
   uploadedDocuments  Document[]
   activities         ClaimActivity[] @relation("ActivityPerformedBy")
+
+  messagesSent       Message[]          @relation("MessageSender")
+  messagesReceived   Message[]          @relation("MessageReceiver") 
+  conversationReads  ConversationRead[]
 }
 
 
@@ -102,6 +106,8 @@ model Claim {
   documents      Document[]
   activities  ClaimActivity[]
 
+   messages       Message[]
+
   createdAt      DateTime        @default(now())
   updatedAt      DateTime        @updatedAt
 
@@ -151,4 +157,47 @@ model Document {
   updatedAt    DateTime     @updatedAt
 
   @@map("documents")
+}
+
+enum MessageStatus {
+  SENT
+  DELIVERED
+  READ        
+}
+
+model Message {
+  messageId   String   @id @default(cuid())
+  content     String
+  createdDate DateTime @default(now())
+
+  // sender
+  senderId    String
+  sender      User     @relation("MessageSender", fields: [senderId], references: [id])
+
+  // receiver (DMs only)
+  receiverId  String?
+  receiver    User?    @relation("MessageReceiver", fields: [receiverId], references: [id])
+
+  // claim room (group chat)
+  claimId     String?
+  claim       Claim?   @relation(fields: [claimId], references: [claimId])
+
+  // DM grouping key
+  dmKey       String?
+
+  @@index([claimId, createdDate])
+  @@index([dmKey, createdDate])
+  @@index([senderId, createdDate])
+  @@index([receiverId, createdDate])
+}
+
+model ConversationRead {
+  userId          String
+  conversationKey String
+  lastReadAt      DateTime?
+
+  user            User        @relation(fields: [userId], references: [id])
+
+  @@id([userId, conversationKey])
+  @@index([conversationKey])
 }

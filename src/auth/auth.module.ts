@@ -17,6 +17,7 @@ import { JwtStrategy } from './middlewares/jwt.strategy';
   ],
   providers: [AuthService, JwtStrategy],
   controllers: [AuthController],
+  exports: [JwtModule],
 })
 export class AuthModule {}
 
