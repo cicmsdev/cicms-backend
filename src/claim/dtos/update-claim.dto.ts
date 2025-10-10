@@ -1,4 +1,6 @@
-import { IsOptional, IsString, IsUUID, MaxLength } from 'class-validator';
+// update-claim.dto.ts
+import { IsOptional, IsString, IsUUID, MaxLength, IsEnum } from 'class-validator';
+import { ClaimType } from '@prisma/client';
 
 export class UpdateClaimDto {
   @IsOptional()
@@ -9,4 +11,8 @@ export class UpdateClaimDto {
   @IsOptional()
   @IsUUID()
   companyId?: string;
+
+  @IsOptional()
+  @IsEnum(ClaimType, { message: 'Invalid claim type' })
+  claimType?: ClaimType;
 }

@@ -124,6 +124,7 @@ export class AuthService {
             return {
                 message: `Enter 6 digits we sent to ${maskedEmail}`,
                 userId: user.id,
+                name: user.name,
                 email: user.email,
                 mustChangePassword: false,
                 role: user.role.name,
@@ -147,12 +148,12 @@ export class AuthService {
 
             const incoming = String(dto.otp).trim();
 
-            // 1) Ensure the user actually has a role
+            // Ensure the user actually has a role
             if (!user.roleId) {
                 throw new BadRequestException("User has no role assigned. Contact admin.");
             }
 
-            // 2) Lookup role name (once)
+            // Lookup role name (once)
             const role = await this.prisma.role.findUnique({
                 where: { id: user.roleId },
                 select: { name: true },
@@ -161,7 +162,7 @@ export class AuthService {
                 throw new BadRequestException("User role not found.");
             }
 
-            // 3) Atomically consume OTP (guards against reuse/race)
+            // Atomically consume OTP (guards against reuse/race)
             const now = new Date();
             const consumed = await this.prisma.user.updateMany({
                 where: {

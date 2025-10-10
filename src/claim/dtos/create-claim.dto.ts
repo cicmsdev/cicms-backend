@@ -1,5 +1,7 @@
-import { IsUUID, IsString, MaxLength, IsEmail, Matches } from 'class-validator';
+
+import { IsUUID, IsString, MaxLength, IsEnum } from 'class-validator';
 import { Transform } from 'class-transformer';
+import { ClaimType } from '@prisma/client';
 
 export class CreateClaimDto {
   @IsUUID()
@@ -9,4 +11,7 @@ export class CreateClaimDto {
   @MaxLength(25)
   @Transform(({ value }) => value?.trim())
   claimTitle: string;
+
+  @IsEnum(ClaimType, { message: 'Invalid claim type' })
+  claimType: ClaimType; 
 }

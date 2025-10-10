@@ -1,4 +1,4 @@
-import { Controller, Get, Param, Query, UseGuards, Req, BadRequestException } from '@nestjs/common';
+import { Controller, Get, Param, Query, UseGuards, Req, BadRequestException, Post, Body } from '@nestjs/common';
 import { JwtAuthGuard } from 'src/auth/middlewares/jwt-auth.guard';
 import { ChatService } from './chat.service';
 import { CurrentUser } from 'src/auth/middlewares/current-user.decorator';
@@ -21,11 +21,7 @@ export class ChatController {
     }
 
     // Unread for one conversation
-    @Get('unread')
-    async unread(@Req() req: any, @Query('key') conversationKey: string) {
-        if (!conversationKey) throw new BadRequestException('key required');
-        return { key: conversationKey, count: await this.chat.unreadCount(req.user.id, conversationKey) };
-    }
+    
 
     @Get('contacts')
     async listContacts(
@@ -46,10 +42,23 @@ export class ChatController {
     }
 
 
-    @Get('recent')
-    async recent(@Req() req: any, @Query('limit') limit?: string) {
-        const n = Number(limit);
-        const rows = await this.chat.listRecentConversations(req.user, Number.isFinite(n) ? n : 20);
-        return { data: rows };
-    }
+   @Get('unread')
+async unread(@Req() req: any, @Query('key') conversationKey: string) {
+  if (!conversationKey) throw new BadRequestException('key required');
+  return { key: conversationKey, count: await this.chat.unreadCount(req.user.sub, conversationKey) };
+}
+
+@Get('recent')
+async recent(@Req() req: any, @Query('limit') limit?: string) {
+  const n = Number(limit);
+  const rows = await this.chat.listRecentConversations(req.user, Number.isFinite(n) ? n : 20);
+  return { data: rows };
+}
+
+@Post('mark-read')
+async markRead(@Req() req: any, @Body('key') key?: string) {
+  if (!key) throw new BadRequestException('key required');
+  await this.chat.markRead(req.user.sub, key);
+  return { ok: true, key };
+}
 }

@@ -11,22 +11,22 @@ type JwtPayload = {
 };
 
 function extractTokenFromSocket(client: Socket): string | null {
-  // Prefer handshake.auth.token (Socket.IO standard), fallback to Authorization header or cookie
   const fromAuth = (client.handshake.auth as any)?.token;
   if (typeof fromAuth === 'string' && fromAuth.trim()) return fromAuth;
+
+  const q = client.handshake.query?.token;
+  if (typeof q === 'string' && q.trim()) return q;
 
   const authHeader = client.handshake.headers?.authorization;
   if (typeof authHeader === 'string' && authHeader.startsWith('Bearer ')) {
     return authHeader.slice(7);
   }
 
-  // OPTIONAL: cookie support (if you set one named "access_token")
   const cookie = client.handshake.headers?.cookie;
   if (typeof cookie === 'string') {
     const match = cookie.split(';').map(s => s.trim()).find(s => s.startsWith('access_token='));
     if (match) return decodeURIComponent(match.split('=')[1]);
   }
-
   return null;
 }
 

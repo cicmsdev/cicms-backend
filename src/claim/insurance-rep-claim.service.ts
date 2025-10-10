@@ -6,289 +6,314 @@ import {
   InternalServerErrorException,
 } from '@nestjs/common';
 import { DatabaseService } from 'src/database/database.service';
-import { Prisma, ClaimStatus, $Enums } from '@prisma/client';
+import { Prisma, ClaimStatus, $Enums, UserStatus, NotificationType } from '@prisma/client';
 
 import { QueryClaimsDto } from './dtos/query-claims.dto';
 import {
   UpdateInsuranceClaimStatusDto,
   InsuranceAllowedStatus,
 } from './dtos/update-claim-status.dto';
+import { NotificationsService } from 'src/notifications/notifications.service';
 
 type CountRow = { status: $Enums.ClaimStatus; _count: { _all: number } };
 
 @Injectable()
 export class InsuranceRepClaimService {
-  constructor(private readonly prisma: DatabaseService) { }
+  constructor(
+    private readonly prisma: DatabaseService,
+    private readonly notifications: NotificationsService,
+  ) { }
 
   /** Insurance: list claims for my company (filters + pagination) */
-async findAllForInsurance(userId: string, q?: QueryClaimsDto) {
-  try {
-    const rep = await this.prisma.user.findUnique({
-      where: { id: userId },
-      select: { insuranceCompanyId: true },
-    });
+  async findAllForInsurance(userId: string, q?: QueryClaimsDto) {
+    try {
+      const rep = await this.prisma.user.findUnique({
+        where: { id: userId },
+        select: { insuranceCompanyId: true },
+      });
 
-    if (!rep?.insuranceCompanyId) {
-      throw new ForbiddenException('User is not linked to an insurance company.');
-    }
-
-    const {
-      status,
-      submittedFrom,
-      submittedTo,
-      search,
-      page = 1,
-      pageSize = 10,
-    } = q ?? {};
-
-    const where: Prisma.ClaimWhereInput = { companyId: rep.insuranceCompanyId };
-
-    // --- status: array or single ---
-    if (Array.isArray(status) && status.length) {
-      const allowed = new Set(Object.values(ClaimStatus));
-      const statuses = (status as ClaimStatus[]).filter(Boolean);
-      if (!statuses.every(s => allowed.has(s))) {
-        throw new BadRequestException('Invalid status filter');
+      if (!rep?.insuranceCompanyId) {
+        throw new ForbiddenException('User is not linked to an insurance company.');
       }
-      where.status = { in: statuses };
-    } else if (status && !Array.isArray(status)) {
-      const s = status as ClaimStatus;
-      if (!(Object.values(ClaimStatus) as ClaimStatus[]).includes(s)) {
-        throw new BadRequestException('Invalid status filter');
+
+      const {
+        status,
+        submittedFrom,
+        submittedTo,
+        search,
+        page = 1,
+        pageSize = 10,
+      } = q ?? {};
+
+      const where: Prisma.ClaimWhereInput = { companyId: rep.insuranceCompanyId };
+
+      // --- status: array or single ---
+      if (Array.isArray(status) && status.length) {
+        const allowed = new Set(Object.values(ClaimStatus));
+        const statuses = (status as ClaimStatus[]).filter(Boolean);
+        if (!statuses.every(s => allowed.has(s))) {
+          throw new BadRequestException('Invalid status filter');
+        }
+        where.status = { in: statuses };
+      } else if (status && !Array.isArray(status)) {
+        const s = status as ClaimStatus;
+        if (!(Object.values(ClaimStatus) as ClaimStatus[]).includes(s)) {
+          throw new BadRequestException('Invalid status filter');
+        }
+        where.status = s;
       }
-      where.status = s;
+
+      if (submittedFrom || submittedTo) {
+        where.submissionDate = {};
+        if (submittedFrom) (where.submissionDate as any).gte = new Date(submittedFrom);
+        if (submittedTo) (where.submissionDate as any).lte = new Date(submittedTo);
+      }
+
+      if (search) {
+        where.OR = [{ ClaimTitle: { contains: search, mode: 'insensitive' } }];
+      }
+
+      const skip = (page - 1) * pageSize;
+
+      const [items, total] = await this.prisma.$transaction([
+        this.prisma.claim.findMany({
+          where,
+          select: {
+            claimId: true,
+            ClaimTitle: true,
+            status: true,
+            submissionDate: true,
+            claimType: true,
+            company: { select: { companyId: true, name: true } },
+            submittedBy: { select: { id: true, name: true, email: true } },
+            evaluator: { select: { id: true, name: true, email: true } },
+            _count: { select: { documents: true } },
+          },
+          orderBy: { submissionDate: 'asc' },
+          skip,
+          take: pageSize,
+        }),
+        this.prisma.claim.count({ where }),
+      ]);
+
+      const data = items.map(it => ({
+        ...it,
+        documentsCount: it._count.documents,
+        _count: undefined as unknown as undefined,
+      }));
+
+      return {
+        data,
+        page,
+        pageSize,
+        total,
+        totalPages: Math.ceil(total / pageSize),
+      };
+    } catch (error) {
+      console.error('findAllForInsurance error:', error);
+      if (error instanceof BadRequestException || error instanceof ForbiddenException) throw error;
+      throw new InternalServerErrorException('Failed to list claims for insurer');
     }
-
-    if (submittedFrom || submittedTo) {
-      where.submissionDate = {};
-      if (submittedFrom) (where.submissionDate as any).gte = new Date(submittedFrom);
-      if (submittedTo) (where.submissionDate as any).lte = new Date(submittedTo);
-    }
-
-    if (search) {
-      where.OR = [{ ClaimTitle: { contains: search, mode: 'insensitive' } }];
-    }
-
-    const skip = (page - 1) * pageSize;
-
-    const [items, total] = await this.prisma.$transaction([
-      this.prisma.claim.findMany({
-        where,
-        select: {
-          claimId: true,
-          ClaimTitle: true,
-          status: true,
-          submissionDate: true,
-          company: { select: { companyId: true, name: true } },
-          submittedBy: { select: { id: true, name: true, email: true } },
-          evaluator: { select: { id: true, name: true, email: true } },
-          _count: { select: { documents: true } },
-        },
-        orderBy: { submissionDate: 'desc' },
-        skip,
-        take: pageSize,
-      }),
-      this.prisma.claim.count({ where }),
-    ]);
-
-    const data = items.map(it => ({
-      ...it,
-      documentsCount: it._count.documents,
-      _count: undefined as unknown as undefined,
-    }));
-
-    return {
-      data,
-      page,
-      pageSize,
-      total,
-      totalPages: Math.ceil(total / pageSize),
-    };
-  } catch (error) {
-    console.error('findAllForInsurance error:', error);
-    if (error instanceof BadRequestException || error instanceof ForbiddenException) throw error;
-    throw new InternalServerErrorException('Failed to list claims for insurer');
   }
-}
 
 
 
   /** Insurance: get single claim by ID */
-// service method: add company.email, company.representatives, and uploader.phoneNumber
-async findOneForInsurance(userId: string, claimId: string) {
-  try {
-    const rep = await this.prisma.user.findUnique({
-      where: { id: userId },
-      select: { insuranceCompanyId: true },
-    });
-    if (!rep?.insuranceCompanyId) {
-      throw new ForbiddenException('User is not linked to an insurance company.');
-    }
+  // service method: add company.email, company.representatives, and uploader.phoneNumber
+  async findOneForInsurance(userId: string, claimId: string) {
+    try {
+      const rep = await this.prisma.user.findUnique({
+        where: { id: userId },
+        select: { insuranceCompanyId: true },
+      });
+      if (!rep?.insuranceCompanyId) {
+        throw new ForbiddenException('User is not linked to an insurance company.');
+      }
 
-    const claim = await this.prisma.claim.findUnique({
-      where: { claimId },
-      select: {
-        claimId: true,
-        submissionDate: true,
-        status: true,
-        ClaimTitle: true,
+      const claim = await this.prisma.claim.findUnique({
+        where: { claimId },
+        select: {
+          claimId: true,
+          submissionDate: true,
+          status: true,
+          ClaimTitle: true,
 
-        submittedBy: {
-          select: { id: true, name: true, email: true, phoneNumber: true },
-        },
+          submittedBy: {
+            select: { id: true, name: true, email: true, phoneNumber: true },
+          },
 
-        evaluator: {
-          select: { id: true, name: true, email: true, phoneNumber: true },
-        },
+          evaluator: {
+            select: { id: true, name: true, email: true, phoneNumber: true },
+          },
 
-        company: {
-          select: {
-            companyId: true,
-            name: true,
-            email: true, 
-            representatives: { 
-              select: { id: true, name: true, email: true, phoneNumber: true },
-              
+          company: {
+            select: {
+              companyId: true,
+              name: true,
+              email: true,
+              representatives: {
+                select: { id: true, name: true, email: true, phoneNumber: true },
+
+              },
             },
           },
-        },
 
-        documents: {
-          select: {
-            documentId: true,
-            documentType: true,
-            filePath: true,
-            uploadDate: true,
-            uploader: {
-              
-              select: { id: true, name: true, email: true, phoneNumber: true },
+          documents: {
+            select: {
+              documentId: true,
+              documentType: true,
+              filePath: true,
+              uploadDate: true,
+              uploader: {
+
+                select: { id: true, name: true, email: true, phoneNumber: true },
+              },
+            },
+            orderBy: { uploadDate: 'desc' },
+          },
+
+          activities: {
+            orderBy: { createdAt: 'desc' },
+            select: {
+              id: true,
+              createdAt: true,
+              action: true,
+              fromStatus: true,
+              toStatus: true,
+              reason: true,
+              performedBy: { select: { id: true, name: true, email: true } },
             },
           },
-          orderBy: { uploadDate: 'desc' },
+
+          createdAt: true,
+          updatedAt: true,
         },
+      });
 
-        activities: {
-          orderBy: { createdAt: 'desc' },
-          select: {
-            id: true,
-            createdAt: true,
-            action: true,
-            fromStatus: true,
-            toStatus: true,
-            reason: true,
-            performedBy: { select: { id: true, name: true, email: true } },
-          },
-        },
+      if (!claim) throw new NotFoundException('Claim not found.');
+      if (claim.company.companyId !== rep.insuranceCompanyId) {
+        throw new ForbiddenException('You can only view claims for your company.');
+      }
 
-        createdAt: true,
-        updatedAt: true,
-      },
-    });
-
-    if (!claim) throw new NotFoundException('Claim not found.');
-    if (claim.company.companyId !== rep.insuranceCompanyId) {
-      throw new ForbiddenException('You can only view claims for your company.');
+      return claim;
+    } catch (error) {
+      console.error('findOneForInsurance error:', error);
+      if (error instanceof NotFoundException || error instanceof ForbiddenException) throw error;
+      throw new InternalServerErrorException('Failed to fetch claim for insurer');
     }
-
-    return claim;
-  } catch (error) {
-    console.error('findOneForInsurance error:', error);
-    if (error instanceof NotFoundException || error instanceof ForbiddenException) throw error;
-    throw new InternalServerErrorException('Failed to fetch claim for insurer');
   }
-}
 
 
   /** Insurance: update claim status to APPROVED or REJECTED only */
   async updateStatusAsInsurance(
-  userId: string,
-  claimId: string,
-  dto: UpdateInsuranceClaimStatusDto,
-) {
-  try {
-    const rep = await this.prisma.user.findUnique({
-      where: { id: userId },
-      select: { insuranceCompanyId: true },
-    });
-    if (!rep?.insuranceCompanyId) {
-      throw new ForbiddenException('User is not linked to an insurance company.');
-    }
-
-    // Map incoming insurer-allowed status to ClaimStatus
-    let next: ClaimStatus;
-    switch (dto.status) {
-      case InsuranceAllowedStatus.APPROVED:
-        next = ClaimStatus.APPROVED;
-        break;
-      case InsuranceAllowedStatus.REJECTED:
-        next = ClaimStatus.REJECTED;
-        break;
-      default:
-        throw new BadRequestException('Invalid insurer status');
-    }
-
-    const result = await this.prisma.$transaction(async (tx) => {
-      const claim = await tx.claim.findUnique({
-        where: { claimId },
-        select: { claimId: true, companyId: true, status: true, updatedAt: true },
+    userId: string,
+    claimId: string,
+    dto: UpdateInsuranceClaimStatusDto,
+  ) {
+    try {
+      const rep = await this.prisma.user.findUnique({
+        where: { id: userId },
+        select: { insuranceCompanyId: true },
       });
-      if (!claim) throw new NotFoundException('Claim not found.');
-      if (claim.companyId !== rep.insuranceCompanyId) {
-        throw new ForbiddenException('You can only act on claims for your company.');
+      if (!rep?.insuranceCompanyId) {
+        throw new ForbiddenException('User is not linked to an insurance company.');
       }
 
-      // Allow transitions FROM: SUBMITTED, APPROVED, REJECTED
-      const allowedFrom = new Set<ClaimStatus>([
-        ClaimStatus.SUBMITTED,
-        ClaimStatus.APPROVED,
-        ClaimStatus.REJECTED,
-      ]);
-      if (!allowedFrom.has(claim.status)) {
-        throw new BadRequestException(
-          `Cannot change status from ${claim.status}. Allowed from: SUBMITTED, APPROVED, REJECTED.`,
-        );
+      // Map incoming insurer-allowed status to ClaimStatus
+      let next: ClaimStatus;
+      switch (dto.status) {
+        case InsuranceAllowedStatus.APPROVED:
+          next = ClaimStatus.APPROVED;
+          break;
+        case InsuranceAllowedStatus.REJECTED:
+          next = ClaimStatus.REJECTED;
+          break;
+        default:
+          throw new BadRequestException('Invalid insurer status');
       }
 
-      // If no change, return current state without writing/logging
-      if (claim.status === next) {
-        return { claimId: claim.claimId, status: claim.status, updatedAt: claim.updatedAt };
-      }
+      const { updated, oldStatus } = await this.prisma.$transaction(async (tx) => {
+        const claim = await tx.claim.findUnique({
+          where: { claimId },
+          select: { claimId: true, companyId: true, status: true, updatedAt: true },
+        });
+        if (!claim) throw new NotFoundException('Claim not found.');
+        if (claim.companyId !== rep.insuranceCompanyId) {
+          throw new ForbiddenException('You can only act on claims for your company.');
+        }
 
-      const updated = await tx.claim.update({
-        where: { claimId },
-        data: { status: next },
-        select: { claimId: true, status: true, updatedAt: true },
+        // Allow transitions FROM: SUBMITTED, APPROVED, REJECTED
+        const allowedFrom = new Set<ClaimStatus>([
+          ClaimStatus.SUBMITTED,
+          ClaimStatus.APPROVED,
+          ClaimStatus.REJECTED,
+        ]);
+        if (!allowedFrom.has(claim.status)) {
+          throw new BadRequestException(
+            `Cannot change status from ${claim.status}. Allowed from: SUBMITTED, APPROVED, REJECTED.`,
+          );
+        }
+
+        // If no change, return current state without writing/logging
+        if (claim.status === next) {
+          return {
+            updated: {
+              claimId: claim.claimId,
+              status: claim.status,
+              updatedAt: claim.updatedAt,
+            },
+            oldStatus: claim.status,
+          };
+        }
+
+        const updated = await tx.claim.update({
+          where: { claimId },
+          data: { status: next },
+          select: { claimId: true, status: true, updatedAt: true },
+        });
+
+        await tx.claimActivity.create({
+          data: {
+            claimId,
+            performedById: userId,
+            action: 'STATUS_UPDATE',
+            fromStatus: claim.status,
+            toStatus: next,
+            reason: dto.reason ?? null,
+          },
+        });
+
+        return { updated, oldStatus: claim.status };
       });
 
-      await tx.claimActivity.create({
-        data: {
-          claimId,
-          performedById: userId,
-          action: 'STATUS_UPDATE',
-          fromStatus: claim.status,
-          toStatus: next,
+      const changed = updated.status === next;
+
+      // 🔔 Notify all relevant parties on ANY insurer status change (approved OR rejected)
+      await this.notifications.createInsurerStatusUpdateNotifications(
+        claimId,
+        userId,
+        oldStatus,
+        next,
+        {
           reason: dto.reason ?? null,
+          notifyClaimManagers: true,
+          scopeManagersToSameCompany: true,
         },
-      });
+      );
 
-      return updated;
-    });
-
-    // Tailored message depending on whether we actually changed something
-    const changed = result.status === next;
-    return { message: changed ? 'Status updated' : 'Status unchanged', data: result };
-  } catch (error) {
-    console.error('updateStatusAsInsurance error:', error);
-    if (
-      error instanceof BadRequestException ||
-      error instanceof ForbiddenException ||
-      error instanceof NotFoundException
-    ) {
-      throw error;
+      return { message: changed ? 'Status updated' : 'Status unchanged', data: updated };
+    } catch (error) {
+      console.error('updateStatusAsInsurance error:', error);
+      if (
+        error instanceof BadRequestException ||
+        error instanceof ForbiddenException ||
+        error instanceof NotFoundException
+      ) {
+        throw error;
+      }
+      throw new InternalServerErrorException('Failed to update status');
     }
-    throw new InternalServerErrorException('Failed to update status');
   }
-}
 
 
   /** Insurance: dashboard summary */

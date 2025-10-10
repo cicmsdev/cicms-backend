@@ -1,6 +1,8 @@
+// src/claim/claim.module.ts
 import { Module } from '@nestjs/common';
 import { DatabaseModule } from 'src/database/database.module';
 import { RoleModule } from 'src/role/role.module';
+import { NotificationsModule } from 'src/notifications/notifications.module';
 
 import { ContractorClaimController } from './contractor.claim.controller';
 import { InsuranceRepClaimController } from './insurance-rep.claim.controller';
@@ -13,7 +15,7 @@ import { EvaluatorClaimService } from './evaluator-claim.service';
 import { ClaimManagerService } from './claim-manager.service';
 
 @Module({
-  imports: [DatabaseModule, RoleModule],
+  imports: [DatabaseModule, RoleModule, NotificationsModule], // ✅ import module that exports the service
   controllers: [
     ContractorClaimController,
     InsuranceRepClaimController,
@@ -25,12 +27,14 @@ import { ClaimManagerService } from './claim-manager.service';
     InsuranceRepClaimService,
     EvaluatorClaimService,
     ClaimManagerService,
+    
   ],
   exports: [
     ContractorClaimService,
     InsuranceRepClaimService,
     EvaluatorClaimService,
     ClaimManagerService,
+    
   ],
 })
 export class ClaimModule {}

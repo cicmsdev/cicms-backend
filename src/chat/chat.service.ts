@@ -419,119 +419,129 @@ async listDmContacts(
   const limit = Math.min(Math.max(opts?.limit ?? 20, 1), 100);
   const search = (opts?.search ?? '').trim();
 
+  const ADMIN_LIKE_NAMES = ['Admin', 'Claim Manager'];
+  const EVALUATOR_NAME = 'Evaluator';
+  const INSURER_REP_NAME = 'Insurance Representative';
+
+  // Load current user (incl. role)
   const me = await this.prisma.user.findUnique({
     where: { id: userId },
-    select: { id: true, insuranceCompanyId: true },
+    select: { id: true, insuranceCompanyId: true, role: { select: { name: true } } },
   });
   if (!me) throw new ForbiddenException('User not found');
 
-  // --- A) Recent DM partners (group by dmKey) ---
+  const myRoleName = me.role?.name ?? '';
+  const isAdminLike = ADMIN_LIKE_NAMES.includes(myRoleName);
+  const isEvaluator = myRoleName === EVALUATOR_NAME;
+  const isInsurerRep = myRoleName === INSURER_REP_NAME;
+
+  // A) Recent DM partners
   const recentGroups = await this.prisma.message.groupBy({
     by: ['dmKey'],
-    where: {
-      dmKey: { not: null },
-      OR: [{ senderId: userId }, { receiverId: userId }],
-    },
+    where: { dmKey: { not: null }, OR: [{ senderId: userId }, { receiverId: userId }] },
     _max: { createdDate: true },
     orderBy: { _max: { createdDate: 'desc' } },
     take: 200,
   });
 
-  // Extract partnerIds from keys like "dm:<id1>:<id2>"
   const recentPartnerIds: string[] = [];
   for (const g of recentGroups) {
     const key = g.dmKey!;
-    const parts = key.split(':'); // ["dm", "<id1>", "<id2>"]
-    const ids = parts.slice(1);
-    if (ids.length === 2) {
-      const other =
-        ids[0] === userId ? ids[1] : ids[1] === userId ? ids[0] : null;
-      if (other && !recentPartnerIds.includes(other)) recentPartnerIds.push(other);
-    }
+    const [_, a, b] = key.split(':'); // dm:<a>:<b>
+    const other = a === userId ? b : b === userId ? a : null;
+    if (other && !recentPartnerIds.includes(other)) recentPartnerIds.push(other);
   }
 
-  // --- B) Discoverable candidates by relationships ---
+  // B) Discoverable graph per role
   const discoverIds = new Set<string>();
 
-  if (me.insuranceCompanyId) {
-    // Rep: submitters/evaluators tied to my company + fellow reps
-    const claims = await this.prisma.claim.findMany({
-      where: { companyId: me.insuranceCompanyId },
-      select: { submittedById: true, evaluatorId: true },
-    });
-    for (const c of claims) {
-      if (c.submittedById && c.submittedById !== userId)
-        discoverIds.add(c.submittedById);
-      if (c.evaluatorId && c.evaluatorId !== userId)
-        discoverIds.add(c.evaluatorId);
-    }
-    const fellowReps = await this.prisma.user.findMany({
-      where: {
-        insuranceCompanyId: me.insuranceCompanyId,
-        id: { not: userId },
-      },
+  if (isAdminLike) {
+    // Admin-like sees everyone (except self)
+    const everyone = await this.prisma.user.findMany({
+      where: { id: { not: userId } },
       select: { id: true },
     });
-    for (const r of fellowReps) discoverIds.add(r.id);
+    for (const u of everyone) discoverIds.add(u.id);
   } else {
-    // Contractor/Evaluator: insurer reps for companies on my claims + evaluators on my claims
-    const myClaims = await this.prisma.claim.findMany({
-      where: { OR: [{ submittedById: userId }, { evaluatorId: userId }] },
-      select: { companyId: true, evaluatorId: true },
+    // Everyone should see all admin-like users
+    const admins = await this.prisma.user.findMany({
+      where: { id: { not: userId }, role: { name: { in: ADMIN_LIKE_NAMES } } },
+      select: { id: true },
     });
-    const companyIds = Array.from(
-      new Set(myClaims.map((c) => c.companyId).filter(Boolean))
-    );
-    if (companyIds.length) {
-      const reps = await this.prisma.user.findMany({
-        where: {
-          insuranceCompanyId: { in: companyIds },
-          id: { not: userId },
-        },
+    for (const u of admins) discoverIds.add(u.id);
+
+    if (isInsurerRep && me.insuranceCompanyId) {
+      // Insurer rep graph: submitters/evaluators in same company + fellow reps
+      const claims = await this.prisma.claim.findMany({
+        where: { companyId: me.insuranceCompanyId },
+        select: { submittedById: true, evaluatorId: true },
+      });
+      for (const c of claims) {
+        if (c.submittedById && c.submittedById !== userId) discoverIds.add(c.submittedById);
+        if (c.evaluatorId && c.evaluatorId !== userId) discoverIds.add(c.evaluatorId);
+      }
+      const fellowReps = await this.prisma.user.findMany({
+        where: { insuranceCompanyId: me.insuranceCompanyId, id: { not: userId } },
         select: { id: true },
       });
-      for (const r of reps) discoverIds.add(r.id);
-    }
-    for (const c of myClaims) {
-      if (c.evaluatorId && c.evaluatorId !== userId) discoverIds.add(c.evaluatorId);
+      for (const r of fellowReps) discoverIds.add(r.id);
+    } else {
+      // Contractor/Evaluator graph: insurer reps on my companies + evaluators on my claims
+      const myClaims = await this.prisma.claim.findMany({
+        where: { OR: [{ submittedById: userId }, { evaluatorId: userId }] },
+        select: { companyId: true, evaluatorId: true, submittedById: true },
+      });
+
+      const companyIds = Array.from(new Set(myClaims.map(c => c.companyId).filter(Boolean)));
+      if (companyIds.length) {
+        const reps = await this.prisma.user.findMany({
+          where: { insuranceCompanyId: { in: companyIds }, id: { not: userId } },
+          select: { id: true },
+        });
+        for (const r of reps) discoverIds.add(r.id);
+      }
+
+      // other evaluators tied to my claims
+      for (const c of myClaims) {
+        if (c.evaluatorId && c.evaluatorId !== userId) discoverIds.add(c.evaluatorId);
+      }
+
+      // Evaluator: include contractors (submitters) for claims assigned to me
+      if (isEvaluator) {
+        for (const c of myClaims) {
+          if (c.evaluatorId === userId && c.submittedById && c.submittedById !== userId) {
+            discoverIds.add(c.submittedById);
+          }
+        }
+      }
     }
   }
 
-  // Merge: recent first, then discoverables not already in recent
+  // Merge: recent first, then discoverables
   const orderedIds: string[] = [...recentPartnerIds];
   for (const id of discoverIds) if (!orderedIds.includes(id)) orderedIds.push(id);
 
-  // --- Search filter (typed) ---
+  // Search (by name/email/phone/role)
   const whereSearch: Prisma.UserWhereInput | undefined = search
     ? {
         OR: [
           { name:  { contains: search, mode: Prisma.QueryMode.insensitive } },
           { email: { contains: search, mode: Prisma.QueryMode.insensitive } },
           { phoneNumber: { contains: search } },
-          // also allow searching by role name
           { role: { name: { contains: search, mode: Prisma.QueryMode.insensitive } } },
         ],
       }
     : undefined;
 
-  // Fetch details for candidates (cap to avoid huge IN() lists)
-  const sliceIds = orderedIds.slice(0, 500);
+  const sliceIds = orderedIds.slice(0, 10_000);
   if (sliceIds.length === 0) return [];
 
   const candidatesRaw = await this.prisma.user.findMany({
-    where: {
-      id: { in: sliceIds, notIn: [userId] },
-      ...(whereSearch ?? {}),
-    },
-    select: {
-      id: true,
-      name: true,
-      email: true,
-      role: { select: { name: true } }, // ⬅️ include role
-    },
+    where: { id: { in: sliceIds, notIn: [userId] }, ...(whereSearch ?? {}) },
+    select: { id: true, name: true, email: true, role: { select: { name: true } } },
   });
 
-  // Sort by recency order (orderedIds), then by name as stable fallback
+  // Keep recency order, then name
   const pos = new Map(sliceIds.map((id, i) => [id, i]));
   candidatesRaw.sort((a, b) => {
     const pa = pos.get(a.id) ?? Number.MAX_SAFE_INTEGER;
@@ -540,15 +550,12 @@ async listDmContacts(
     return a.name.localeCompare(b.name);
   });
 
-  // Normalize shape for the API
-  const out = candidatesRaw.slice(0, limit).map(u => ({
+  return candidatesRaw.slice(0, limit).map(u => ({
     id: u.id,
     name: u.name,
     email: u.email,
     role: u.role?.name ?? 'User',
   }));
-
-  return out;
 }
 
 

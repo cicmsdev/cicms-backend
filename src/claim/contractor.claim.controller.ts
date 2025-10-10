@@ -62,4 +62,7 @@ export class ContractorClaimController {
   myDashboard(@CurrentUser() user: { sub: string }) {
     return this.service.myDashboard(user.sub);
   }
+
+  
 }
+

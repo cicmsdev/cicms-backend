@@ -1,0 +1,5 @@
+-- CreateEnum
+CREATE TYPE "public"."ClaimType" AS ENUM ('MATERIAL_DAMAGE', 'EQUIPMENT_DAMAGE', 'WORKSITE_ACCIDENT', 'STRUCTURAL_FAILURE', 'FIRE', 'NATURAL_DISASTER', 'ACCIDENT');
+
+-- AlterTable
+ALTER TABLE "public"."claims" ADD COLUMN     "claimType" "public"."ClaimType" NOT NULL DEFAULT 'ACCIDENT';

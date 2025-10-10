@@ -1,7 +1,8 @@
-import { Controller, Get, Post, Body, Patch, Param, Delete } from '@nestjs/common';
+import { Controller, Get, Post, Body, Patch, Param, Delete, Query } from '@nestjs/common';
 import { InsuranceService } from './insurance.service';
 import { CreateInsuranceDto } from './dto/create-insurance.dto';
 import { UpdateInsuranceDto } from './dto/update-insurance.dto';
+import { FindInsuranceQuery } from './dto/find-insurance.query';
 
 @Controller('insurance')
 export class InsuranceController {
@@ -12,9 +13,16 @@ export class InsuranceController {
     return this.insuranceService.createInsurance(createInsuranceDto);
   }
 
-  @Get()
-  findAll() {
-    return this.insuranceService.findAll();
+   @Get()  
+  findAll(@Query() query: FindInsuranceQuery) {
+    return this.insuranceService.findAll(query);
+  }
+
+  // 🔐 Minimal list for selects: active only (companyId + name)
+  @Get('options')
+  
+  options() {
+    return this.insuranceService.listOptions();
   }
 
   @Get(':id')

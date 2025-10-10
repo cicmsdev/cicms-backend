@@ -11,12 +11,17 @@ import { Prisma, ClaimStatus, $Enums } from '@prisma/client';
 import { CreateClaimDto } from './dtos/create-claim.dto';
 import { UpdateClaimDto } from './dtos/update-claim.dto';
 import { QueryClaimsDto } from './dtos/query-claims.dto';
+import { NotificationsService } from 'src/notifications/notifications.service';
+import { ClaimType } from '@prisma/client';
 
 type CountRow = { status: $Enums.ClaimStatus; _count: { _all: number } };
 
 @Injectable()
 export class ContractorClaimService {
-    constructor(private readonly prisma: DatabaseService) { }
+    constructor(
+        private readonly prisma: DatabaseService,
+        private readonly notifications: NotificationsService,
+    ) { }
 
     /** Contractor creates a claim (defaults to SUBMITTED) */
     async createForContractor(submitterId: string, dto: CreateClaimDto) {
@@ -31,14 +36,20 @@ export class ContractorClaimService {
                 data: {
                     submittedById: submitterId,
                     companyId: dto.companyId,
-                    ClaimTitle: dto.claimTitle,            // maps to Prisma field
-                    // status defaults to SUBMITTED; submissionDate auto-now()
+                    ClaimTitle: dto.claimTitle,
+                    claimType: dto.claimType,
                 },
                 include: {
                     company: { select: { companyId: true, name: true } },
                     submittedBy: { select: { id: true, name: true, email: true } },
                 },
             });
+
+            // Send "new claim submitted" notification
+            await this.notifications.createNewClaimSubmittedNotification(
+                claim.claimId,
+                submitterId,
+            );
 
             return { message: 'Claim submitted', data: claim };
         } catch (error) {
@@ -62,7 +73,7 @@ export class ContractorClaimService {
             if (existing.status !== ClaimStatus.SUBMITTED) {
                 throw new BadRequestException('Claim can only be edited while SUBMITTED');
             }
-            // If companyId is provided, ensure it exists
+
             if (dto.companyId) {
                 const company = await this.prisma.insuranceCompany.findUnique({
                     where: { companyId: dto.companyId },
@@ -74,11 +85,18 @@ export class ContractorClaimService {
             const updated = await this.prisma.claim.update({
                 where: { claimId },
                 data: {
-                    ClaimTitle: dto.claimTitle ?? existing.ClaimTitle,
+                    ...(dto.claimTitle ? { ClaimTitle: dto.claimTitle } : {}),
                     ...(dto.companyId ? { companyId: dto.companyId } : {}),
+                    ...(dto.claimType ? { claimType: dto.claimType } : {}),
                 },
                 include: { company: true },
             });
+
+            // "claim edited" notification
+            await this.notifications.createClaimEditedNotification(
+                updated.claimId,
+                submitterId,
+            );
 
             return { message: 'Claim updated', data: updated };
         } catch (error) {
@@ -91,6 +109,7 @@ export class ContractorClaimService {
             throw new InternalServerErrorException('Failed to update claim');
         }
     }
+
 
     /** Single claim, owned by contractor */
     async getMyClaim(claimId: string, submitterId: string) {

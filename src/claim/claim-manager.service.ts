@@ -10,18 +10,28 @@ import { $Enums, ClaimStatus, Prisma } from '@prisma/client';
 import { QueryClaimsDto } from './dtos/query-claims.dto';
 import { AssignEvaluatorDto } from './dtos/assign-evaluator.dto';
 import { ListEvaluatorsDto } from './dtos/list-evaluators.dto';
+import { NotificationsService } from 'src/notifications/notifications.service';
 
 type CountRow = { status: $Enums.ClaimStatus; _count: { _all: number } };
+// helper (put near the top of the service file)
+const humanize = (s?: string | null) =>
+  s ? s.replace(/_/g, ' ').toLowerCase().replace(/\b\w/g, c => c.toUpperCase()) : 'Unknown';
+
 
 @Injectable()
 export class ClaimManagerService {
-  constructor(private readonly prisma: DatabaseService) { }
+  constructor(
+    private readonly prisma: DatabaseService,
+    private readonly notifications: NotificationsService,
+  ) { }
+
+
 
   /** List all claims except SUBMITTED or REJECTED */
   async managerListClaims(q?: QueryClaimsDto & { status?: unknown }) {
     try {
       const {
-        status: rawStatus,   // accept single / array / CSV
+        status: rawStatus,
         submittedFrom,
         submittedTo,
         search,
@@ -29,7 +39,6 @@ export class ClaimManagerService {
         pageSize = 10,
       } = q ?? {};
 
-      // Normalize status: 'A,B', ['A','B'], or single value
       const allEnums = new Set(Object.values(ClaimStatus));
       const normalizeStatuses = (input: unknown): ClaimStatus[] => {
         if (!input) return [];
@@ -42,20 +51,14 @@ export class ClaimManagerService {
       const statuses = normalizeStatuses(rawStatus);
 
       const where: Prisma.ClaimWhereInput = {};
+      if (statuses.length) where.status = { in: statuses };
 
-      // Only filter by status if client provided any
-      if (statuses.length) {
-        where.status = { in: statuses };
-      }
-
-      // Date range
       if (submittedFrom || submittedTo) {
         where.submissionDate = {};
         if (submittedFrom) (where.submissionDate as any).gte = new Date(submittedFrom);
         if (submittedTo) (where.submissionDate as any).lte = new Date(submittedTo);
       }
 
-      // Free-text search (title)
       if (search) {
         where.OR = [{ ClaimTitle: { contains: search, mode: 'insensitive' } }];
       }
@@ -65,23 +68,25 @@ export class ClaimManagerService {
       const [items, total] = await this.prisma.$transaction([
         this.prisma.claim.findMany({
           where,
-          orderBy: { submissionDate: 'desc' },
+          orderBy: { submissionDate: 'asc' },
           skip,
           take: pageSize,
           include: {
             company: true,
             submittedBy: { select: { id: true, name: true, email: true } },
             evaluator: { select: { id: true, name: true, email: true } },
-            _count: { select: { documents: true } }, // count only
+            _count: { select: { documents: true } },
           },
         }),
         this.prisma.claim.count({ where }),
       ]);
 
-      // expose flat documentsCount
+      // Expose flat documentsCount + friendly label for claimType
       const data = items.map((it) => ({
         ...it,
         documentsCount: it._count.documents,
+        claimType: it.claimType ?? null,                     // raw enum (or null)
+        claimTypeLabel: humanize(it.claimType ?? undefined), // e.g. "Material Damage"
         _count: undefined as unknown as undefined,
       }));
 
@@ -91,6 +96,7 @@ export class ClaimManagerService {
       throw new InternalServerErrorException('Failed to list claims for manager');
     }
   }
+
 
 
   /** Manager inbox = approved and unassigned claims */
@@ -128,34 +134,88 @@ export class ClaimManagerService {
   }
 
   /** Assign evaluator (global, not company-scoped) */
-  async managerAssignEvaluator(claimId: string, evaluatorId: string) {
+  async managerAssignEvaluator(managerId: string, claimId: string, evaluatorId: string) {
     try {
-      const { count } = await this.prisma.claim.updateMany({
-        where: {
-          claimId,
-          status: ClaimStatus.APPROVED || ClaimStatus.IN_EVALUATION,
-          evaluatorId: null,
-        },
-        data: {
-          evaluatorId,
-          status: ClaimStatus.IN_EVALUATION,
-        },
-      });
-
-      if (count === 0) {
-        const check = await this.prisma.claim.findUnique({
+      // Do it all atomically
+      const { updated, oldStatus } = await this.prisma.$transaction(async (tx) => {
+        // 1) Load claim
+        const claim = await tx.claim.findUnique({
           where: { claimId },
-          select: { status: true, evaluatorId: true },
+          select: {
+            claimId: true,
+            status: true,
+            evaluatorId: true,
+            submittedById: true,
+            companyId: true,
+            ClaimTitle: true,
+          },
         });
-        if (!check) throw new NotFoundException('Claim not found');
-        if (check.status !== ClaimStatus.APPROVED || check.evaluatorId) {
+        if (!claim) throw new NotFoundException('Claim not found');
+
+        // 2) Validate assignability
+        // Allowed: from APPROVED (most common), or from IN_EVALUATION as long as no evaluator yet.
+        const assignable =
+          (claim.status === ClaimStatus.APPROVED && !claim.evaluatorId) ||
+          (claim.status === ClaimStatus.IN_EVALUATION && !claim.evaluatorId);
+
+        if (!assignable) {
           throw new BadRequestException('Claim is not available for assignment.');
         }
-      }
+
+        // 3) Update claim → set evaluatorId + status IN_EVALUATION
+        const updated = await tx.claim.update({
+          where: { claimId },
+          data: {
+            evaluatorId,
+            status: ClaimStatus.IN_EVALUATION,
+          },
+          select: {
+            claimId: true,
+            status: true,
+            evaluatorId: true,
+            submittedById: true,
+            companyId: true,
+            ClaimTitle: true,
+            updatedAt: true,
+          },
+        });
+
+        // 4) Log activity
+        await tx.claimActivity.create({
+          data: {
+            claimId: claim.claimId,
+            performedById: managerId,
+            action: 'ASSIGN_EVALUATOR',
+            fromStatus: claim.status,
+            toStatus: ClaimStatus.IN_EVALUATION,
+            reason: null,
+          },
+        });
+
+        return { updated, oldStatus: claim.status };
+      });
+
+      //Notify stakeholders (fire-and-forget; remove .catch to make it hard-fail)
+      this.notifications
+        .createClaimStatusNotification(
+          claimId,
+          oldStatus,
+          ClaimStatus.IN_EVALUATION,
+          managerId,
+        )
+        .catch((e) => console.error('notify status-change failed:', e));
+
+      this.notifications
+        .createEvaluatorAssignmentNotification(claimId, updated.evaluatorId!, managerId)
+        .catch((e) => console.error('notify evaluator-assigned failed:', e));
 
       return { message: 'Evaluator assigned successfully' };
     } catch (err) {
       console.error('managerAssignEvaluator error:', err);
+      if (
+        err instanceof BadRequestException ||
+        err instanceof NotFoundException
+      ) throw err;
       throw new InternalServerErrorException('Failed to assign evaluator');
     }
   }
@@ -172,22 +232,13 @@ export class ClaimManagerService {
               name: true,
               email: true,
               representatives: {
-                select: {
-                  id: true,
-                  name: true,
-                  email: true,
-                  phoneNumber: true,
-                },
+                select: { id: true, name: true, email: true, phoneNumber: true },
                 orderBy: { name: 'asc' },
               },
             },
           },
-          submittedBy: {
-            select: { id: true, name: true, email: true, phoneNumber: true },
-          },
-          evaluator: {
-            select: { id: true, name: true, email: true, phoneNumber: true },
-          },
+          submittedBy: { select: { id: true, name: true, email: true, phoneNumber: true } },
+          evaluator: { select: { id: true, name: true, email: true, phoneNumber: true } },
           documents: {
             orderBy: { uploadDate: 'desc' },
             select: {
@@ -214,13 +265,20 @@ export class ClaimManagerService {
       });
 
       if (!claim) throw new NotFoundException('Claim not found');
-      return claim;
+
+      // add human-friendly label without changing existing payload shape
+      return {
+        ...claim,
+        claimType: claim.claimType ?? null,
+        claimTypeLabel: humanize(claim.claimType ?? undefined),
+      };
     } catch (err) {
       console.error('managerGetClaim error:', err);
       if (err instanceof NotFoundException) throw err;
       throw new InternalServerErrorException('Failed to fetch claim');
     }
   }
+
 
   /** Dashboard */
   async managerDashboard() {
@@ -272,73 +330,114 @@ export class ClaimManagerService {
     }
   }
 
-  async assignEvaluatorToClaim(managerUserId: string, claimId: string, dto: AssignEvaluatorDto) {
-  return this.prisma.$transaction(async (tx) => {
-    const claim = await tx.claim.findUnique({
-      where: { claimId },
-      select: { claimId: true, status: true, evaluatorId: true },
-    });
-    if (!claim) throw new NotFoundException('Claim not found');
+  async assignEvaluatorToClaim(
+    managerUserId: string,
+    claimId: string,
+    dto: AssignEvaluatorDto,
+  ) {
+    try {
+      const { updated, oldStatus } = await this.prisma.$transaction(async (tx) => {
+        const claim = await tx.claim.findUnique({
+          where: { claimId },
+          select: { claimId: true, status: true, evaluatorId: true },
+        });
+        if (!claim) throw new NotFoundException('Claim not found');
 
-    // If you want to allow assigning from SUBMITTED as well, include it here:
-    const allowed: $Enums.ClaimStatus[] = [
-     
-      $Enums.ClaimStatus.APPROVED,
-      $Enums.ClaimStatus.IN_EVALUATION,
-    ];
-    const terminal: $Enums.ClaimStatus[] = [
-      $Enums.ClaimStatus.SUBMITTED,  
-      $Enums.ClaimStatus.REJECTED,
-      $Enums.ClaimStatus.RESOLVED,
-      $Enums.ClaimStatus.RESOLVED_IN_COURT,
-    ];
-    if (terminal.includes(claim.status) || !allowed.includes(claim.status)) {
-      throw new BadRequestException(`Claim in status ${claim.status} cannot be assigned`);
+        // Allow assigning only from specific statuses; block terminal statuses
+        const allowed: $Enums.ClaimStatus[] = [
+          $Enums.ClaimStatus.APPROVED,
+          $Enums.ClaimStatus.IN_EVALUATION,
+        ];
+        const terminal: $Enums.ClaimStatus[] = [
+          $Enums.ClaimStatus.SUBMITTED,
+          $Enums.ClaimStatus.REJECTED,
+          $Enums.ClaimStatus.RESOLVED,
+          $Enums.ClaimStatus.RESOLVED_IN_COURT,
+        ];
+        if (terminal.includes(claim.status) || !allowed.includes(claim.status)) {
+          throw new BadRequestException(`Claim in status ${claim.status} cannot be assigned`);
+        }
+
+        // Role-only check; no company scope check
+        const evaluator = await tx.user.findUnique({
+          where: { id: dto.evaluatorId },
+          select: { id: true, role: { select: { name: true } }, status: true },
+        });
+        if (!evaluator) throw new NotFoundException('Evaluator not found');
+        if ((evaluator.role?.name ?? '').toLowerCase() !== 'evaluator') {
+          throw new BadRequestException('User is not an Evaluator');
+        }
+        // If you want to enforce ACTIVE, uncomment:
+        // if (evaluator.status !== $Enums.UserStatus.ACTIVE) throw new BadRequestException('Evaluator is not active');
+
+        const toStatus = $Enums.ClaimStatus.IN_EVALUATION;
+        const reassignment = !!(claim.evaluatorId && claim.evaluatorId !== dto.evaluatorId);
+
+        // Idempotent fast return
+        if (claim.evaluatorId === dto.evaluatorId && claim.status === toStatus) {
+          const current = await tx.claim.findUnique({
+            where: { claimId },
+            select: {
+              claimId: true,
+              status: true,
+              evaluatorId: true,
+              updatedAt: true,
+            },
+          });
+          return { updated: current!, oldStatus: claim.status };
+        }
+
+        const updated = await tx.claim.update({
+          where: { claimId },
+          data: { evaluatorId: dto.evaluatorId, status: toStatus },
+          select: {
+            claimId: true,
+            status: true,
+            evaluatorId: true,
+            updatedAt: true,
+          },
+        });
+
+        await tx.claimActivity.create({
+          data: {
+            claim: { connect: { claimId: claim.claimId } },
+            performedBy: { connect: { id: managerUserId } },
+            action: reassignment ? 'REASSIGNED_EVALUATOR' : 'ASSIGNED_EVALUATOR',
+            fromStatus: claim.status,
+            toStatus,
+            reason: dto.reason ?? null,
+          },
+        });
+
+        return { updated, oldStatus: claim.status };
+      });
+
+      // 🔔 Fire-and-forget notifications (same pattern as managerAssignEvaluator)
+      this.notifications
+        .createClaimStatusNotification(
+          claimId,
+          oldStatus,
+          $Enums.ClaimStatus.IN_EVALUATION,
+          managerUserId,
+        )
+        .catch((e) => console.error('notify status-change failed:', e));
+
+      this.notifications
+        .createEvaluatorAssignmentNotification(
+          claimId,
+          updated.evaluatorId!, // safe due to update above
+          managerUserId,
+        )
+        .catch((e) => console.error('notify evaluator-assigned failed:', e));
+
+      // Return the updated claim (kept your prior behavior)
+      return updated;
+    } catch (err) {
+      console.error('assignEvaluatorToClaim error:', err);
+      if (err instanceof BadRequestException || err instanceof NotFoundException) throw err;
+      throw new InternalServerErrorException('Failed to assign evaluator');
     }
-
-    // Only role check; no company check
-    const evaluator = await tx.user.findUnique({
-      where: { id: dto.evaluatorId },
-      select: { id: true, role: { select: { name: true } }, status: true },
-    });
-    if (!evaluator) throw new NotFoundException('Evaluator not found');
-    if ((evaluator.role?.name ?? '').toLowerCase() !== 'evaluator') {
-      throw new BadRequestException('User is not an Evaluator');
-    }
-    // Optionally enforce ACTIVE:
-    // if (evaluator.status !== $Enums.UserStatus.ACTIVE) throw new BadRequestException('Evaluator is not active');
-
-    const toStatus = $Enums.ClaimStatus.IN_EVALUATION;
-    const reassignment = !!(claim.evaluatorId && claim.evaluatorId !== dto.evaluatorId);
-
-    // Idempotent fast-return
-    if (claim.evaluatorId === dto.evaluatorId && claim.status === toStatus) {
-      return tx.claim.findUnique({ where: { claimId }, include: { /* ...same as yours... */ } });
-    }
-
-    const updated = await tx.claim.update({
-      where: { claimId },
-      data: { evaluatorId: dto.evaluatorId, status: toStatus },
-      include: { /* ...same as yours... */ },
-    });
-
-    await tx.claimActivity.create({
-      data: {
-        claim: { connect: { claimId: claim.claimId } },
-    performedBy: { connect: { id: managerUserId } },
-        action: reassignment ? 'REASSIGNED_EVALUATOR' : 'ASSIGNED_EVALUATOR',
-        fromStatus: claim.status,
-        toStatus,
-        reason: dto.reason,
-      },
-    });
-
-    return updated;
-  });
-}
-
-
-
+  }
 
   async listEvaluatorsWithAssignedCount(dto: ListEvaluatorsDto) {
     const {

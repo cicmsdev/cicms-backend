@@ -2,6 +2,8 @@ import { ConflictException, Injectable, InternalServerErrorException, NotFoundEx
 import { CreateInsuranceDto } from './dto/create-insurance.dto';
 import { UpdateInsuranceDto } from './dto/update-insurance.dto';
 import { DatabaseService } from 'src/database/database.service';
+import { FindInsuranceQuery } from './dto/find-insurance.query';
+import { Prisma } from '@prisma/client';
 
 @Injectable()
 export class InsuranceService {
@@ -53,27 +55,80 @@ async createInsurance(createInsuranceDto: CreateInsuranceDto) {
   }
 }
 
-  async findAll() {
-    try {
-      const insuranceCompanies = await this.prisma.insuranceCompany.findMany({
+  async findAll(query: FindInsuranceQuery) {
+    const { q, active, page = 1, pageSize = 10, sort } = query;
+
+    const where: Prisma.InsuranceCompanyWhereInput = {
+      ...(q
+        ? {
+            OR: [
+              { name: { contains: q, mode: 'insensitive' } },
+              { email: { contains: q, mode: 'insensitive' } },
+              { policyNumberPrefix: { contains: q, mode: 'insensitive' } },
+            ],
+          }
+        : {}),
+      ...(typeof active === 'boolean' ? { isActive: active } : {}),
+    };
+
+    // sort mapper (safe)
+    const [fieldRaw, dirRaw] = (sort ?? '').split(':');
+    const dir: 'asc' | 'desc' = dirRaw?.toLowerCase() === 'asc' ? 'asc' : 'desc';
+    let orderBy: Prisma.InsuranceCompanyOrderByWithRelationInput = { createdAt: 'desc' };
+    switch (fieldRaw) {
+      case 'name':
+        orderBy = { name: dir };
+        break;
+      case 'email':
+        orderBy = { email: dir };
+        break;
+      case 'policyNumberPrefix':
+        orderBy = { policyNumberPrefix: dir };
+        break;
+      case 'createdAt':
+        orderBy = { createdAt: dir };
+        break;
+      case 'isActive':
+        orderBy = { isActive: dir };
+        break;
+      default:
+        orderBy = { createdAt: 'desc' };
+    }
+
+    const [total, items] = await this.prisma.$transaction([
+      this.prisma.insuranceCompany.count({ where }),
+      this.prisma.insuranceCompany.findMany({
+        where,
+        orderBy,
+        skip: (page - 1) * pageSize,
+        take: pageSize,
         select: {
           companyId: true,
           name: true,
           email: true,
           policyNumberPrefix: true,
-          // Include any other fields you want to return
-        }
-      });
-      
-      return {
-        message: 'Insurance companies retrieved successfully',
-        data: insuranceCompanies,
-        count: insuranceCompanies.length
-      };
-    } catch (error) {
-      console.error('Error fetching insurance companies:', error);
-      throw new InternalServerErrorException('Failed to retrieve insurance companies');
-    }
+          isActive: true,
+          createdAt: true,
+        },
+      }),
+    ]);
+
+    return {
+      items,
+      total,
+      page,
+      pageSize,
+      pages: Math.max(1, Math.ceil(total / pageSize)),
+    };
+  }
+
+  // Minimal list for dropdowns (active only)
+  async listOptions() {
+    return this.prisma.insuranceCompany.findMany({
+      where: { isActive: true },
+      orderBy: { name: 'asc' },
+      select: { companyId: true, name: true },
+    });
   }
 
   async findOne(id: string) {

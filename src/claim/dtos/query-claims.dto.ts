@@ -6,15 +6,14 @@ export class QueryClaimsDto {
   @IsOptional()
   @IsEnum(ClaimStatus, { each: true })
   @Transform(({ value }) => {
-    // repeated query params => array already
+    
     if (Array.isArray(value)) return value;
-    // single value or comma-separated list
+    
     if (value == null || value === '') return [];
     const parts = String(value).split(',').map(v => v.trim()).filter(Boolean);
     return parts;
   })
-  status?: ClaimStatus[]; // <- now an array
-
+  status?: ClaimStatus[]; 
   @IsOptional() @IsUUID() companyId?: string;
   @IsOptional() @IsUUID() submittedById?: string;
   @IsOptional() @IsUUID() evaluatorId?: string;

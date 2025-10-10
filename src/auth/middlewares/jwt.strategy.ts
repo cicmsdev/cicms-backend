@@ -25,11 +25,13 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
 
   async validate(payload: JwtPayload) {
     return {
-      sub: payload.sub,
+      sub: payload.sub, 
       email: payload.email,
       name: payload.name,
       role: payload.role ?? payload.roleName,       // keep the role name too (handy if you later switch guard logic)
       roleId: payload.roleId ?? payload.role_id,    // <-- your RolesGuard needs this
     };
   }
+
+  
 }

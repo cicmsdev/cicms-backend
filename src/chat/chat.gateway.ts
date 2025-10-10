@@ -17,7 +17,7 @@ import {
 } from '@nestjs/common';
 import { Server, Socket } from 'socket.io';
 
-import { WsJwtGuard } from 'src/auth/middlewares/ws-jwt.guard';
+import { WsJwtGuard } from 'src/ws-jwt.guard';
 import { ChatService } from 'src/chat/chat.service';
 import { JoinClaimDto, JoinDmDto, SendMessageDto, MarkReadDto } from './chat.dtos';
 
