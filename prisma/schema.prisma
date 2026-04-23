@@ -6,10 +6,258 @@
 
 generator client {
   provider = "prisma-client-js"
-  output   = "../generated/prisma"
 }
 
 datasource db {
   provider = "postgresql"
   url      = env("DATABASE_URL")
 }
+
+model User {
+  id                 String            @id @default(uuid())
+  name               String
+  email              String            @unique
+  password           String
+  phoneNumber        String            @unique
+  status             UserStatus        @default(ACTIVE)
+  roleId             String
+  role               Role              @relation(fields: [roleId], references: [id])
+  insuranceCompanyId String?
+  insuranceCompany   InsuranceCompany? @relation(fields: [insuranceCompanyId], references: [companyId])
+  isDefaultPassword  Boolean           @default(true)
+  OTP_number         String?
+  OTP_life_time      DateTime?
+  lastLogin          DateTime?
+  createdAt          DateTime          @default(now())
+  updatedAt          DateTime          @updatedAt
+
+  submittedClaims   Claim[]         @relation("SubmittedBy")
+  assignedClaims    Claim[]         @relation("Evaluator")
+  uploadedDocuments Document[]
+  activities        ClaimActivity[] @relation("ActivityPerformedBy")
+
+  messagesSent      Message[]          @relation("MessageSender")
+  messagesReceived  Message[]          @relation("MessageReceiver")
+  conversationReads ConversationRead[]
+  notificationsReceived Notification[] @relation("NotificationRecipient")
+  notificationsAuthored Notification[] @relation("NotificationActor")
+
+  @@map("users")
+}
+
+model Role {
+  id         String   @id @default(uuid())
+  name       String   @unique
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
+  users      User[]
+}
+
+enum UserStatus {
+  ACTIVE
+  INACTIVE
+  SUSPENDED
+}
+
+model InsuranceCompany {
+  companyId          String   @id @default(uuid())
+  name               String   @unique
+  email              String   @unique
+  policyNumberPrefix String
+  isActive           Boolean  @default(true)
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  // Relations
+  representatives User[]
+
+  Claims Claim[]
+}
+
+enum ClaimStatus {
+  SUBMITTED
+  APPROVED
+  REJECTED
+  IN_EVALUATION
+  RESOLVED
+  RESOLVED_IN_COURT
+  PAYED
+}
+
+enum ClaimType {
+  MATERIAL_DAMAGE       // Damage to building materials during storage, transport, or installation
+  EQUIPMENT_DAMAGE      // Damage to construction equipment or machinery
+  WORKSITE_ACCIDENT     // Injuries or accidents that occur on the site
+  STRUCTURAL_FAILURE    // Collapse or partial failure of structures
+  FIRE                  // Fire incidents at the construction site
+  NATURAL_DISASTER      // Floods, earthquakes, storms, etc.
+  ACCIDENT
+}
+
+
+model Claim {
+  claimId        String      @id @default(uuid())
+  submissionDate DateTime    @default(now())
+  status         ClaimStatus @default(SUBMITTED)
+  ClaimTitle     String      
+  claimType      ClaimType?   @default(ACCIDENT)
+
+  submittedById String
+  submittedBy   User   @relation("SubmittedBy", fields: [submittedById], references: [id])
+
+  companyId String
+  company   InsuranceCompany @relation(fields: [companyId], references: [companyId])
+
+  evaluatorId String?
+  evaluator   User?   @relation("Evaluator", fields: [evaluatorId], references: [id])
+
+  documents  Document[]
+  activities ClaimActivity[]
+
+  messages Message[]
+  notifications  Notification[] @relation("NotificationClaim")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([submittedById])
+  @@index([companyId])
+  @@index([evaluatorId])
+  @@index([status])
+  @@index([submissionDate])
+  @@index([status, companyId])
+  @@index([status, evaluatorId])
+  @@map("claims")
+}
+
+model ClaimActivity {
+  id            String       @id @default(cuid())
+  claim         Claim        @relation(fields: [claimId], references: [claimId])
+  claimId       String
+  performedBy   User?        @relation("ActivityPerformedBy", fields: [performedById], references: [id])
+  performedById String?
+  action        String // e.g. "STATUS_UPDATE"
+  fromStatus    ClaimStatus?
+  toStatus      ClaimStatus?
+  reason        String?
+  createdAt     DateTime     @default(now())
+
+  @@index([claimId, createdAt])
+}
+
+enum DocumentType {
+  DAMAGE_REPORT
+  POLICE_REPORT
+  SITE_INSPECTION_REPORT
+  LAND_OWNERSHIP_PROOF
+  PAYMENT_PROOF
+}
+
+model Document {
+  documentId   String       @id @default(uuid())
+  documentType DocumentType
+  filePath     String
+  uploadDate   DateTime     @default(now())
+
+  claimId String
+  claim   Claim  @relation(fields: [claimId], references: [claimId])
+
+  uploaderId String
+  uploader   User   @relation(fields: [uploaderId], references: [id])
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([claimId])
+  @@index([uploaderId])
+  @@map("documents")
+}
+
+enum MessageStatus {
+  SENT
+  DELIVERED
+  READ
+}
+
+model Message {
+  messageId   String   @id @default(cuid())
+  content     String
+  createdDate DateTime @default(now())
+
+  // sender
+  senderId String
+  sender   User   @relation("MessageSender", fields: [senderId], references: [id])
+
+  // receiver (DMs only)
+  receiverId String?
+  receiver   User?   @relation("MessageReceiver", fields: [receiverId], references: [id])
+
+  // claim room (group chat)
+  claimId String?
+  claim   Claim?  @relation(fields: [claimId], references: [claimId])
+
+  // DM grouping key
+  dmKey String?
+  notifications Notification[] @relation("NotificationMessage")
+
+  @@index([claimId, createdDate])
+  @@index([dmKey, createdDate])
+  @@index([senderId, createdDate])
+  @@index([receiverId, createdDate])
+}
+
+model ConversationRead {
+  userId          String
+  conversationKey String
+  lastReadAt      DateTime?
+
+  user User @relation(fields: [userId], references: [id])
+
+  @@id([userId, conversationKey])
+  @@index([conversationKey])
+}
+
+enum NotificationType {
+  DM_MESSAGE
+  CLAIM_MESSAGE
+  CLAIM_STATUS_CHANGED
+  EVALUATOR_ASSIGNED
+  DOCUMENT_ADDED
+  SYSTEM
+}
+
+model Notification {
+  id         String   @id @default(cuid())
+
+  // Recipient (required)
+  userId     String
+  user       User     @relation("NotificationRecipient", fields: [userId], references: [id])
+
+  // Channel / content
+  type       NotificationType
+  title      String?
+  body       String?
+  data       Json?      // e.g. { claimId, messageId, dmKey }
+
+  // Optional sources
+  actorId    String?
+  actor      User?      @relation("NotificationActor", fields: [actorId], references: [id])
+
+  claimId    String?
+  claim      Claim?     @relation("NotificationClaim", fields: [claimId], references: [claimId])
+
+  messageId  String?
+  message    Message?   @relation("NotificationMessage", fields: [messageId], references: [messageId])
+
+  // Per-user state
+  seenAt     DateTime?
+  readAt     DateTime?
+  archivedAt DateTime?
+
+  createdAt  DateTime @default(now())
+
+  @@index([userId, createdAt])
+  @@index([userId, readAt])
+  @@index([claimId, createdAt])
+  @@index([messageId])
+}
+
