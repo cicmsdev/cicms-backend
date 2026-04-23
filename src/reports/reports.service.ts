@@ -1,6 +1,7 @@
 import { Injectable } from "@nestjs/common";
 import { DatabaseService } from "src/database/database.service";
 import PDFDocument = require("pdfkit");
+import { ClaimReportQueryDto } from "./dtos/ClaimReportQueryDto";
 
 type Row = {
   contractorId: string;
@@ -14,11 +15,12 @@ type Row = {
   IN_EVALUATION: number;
   RESOLVED: number;
   RESOLVED_IN_COURT: number;
+  PAYED: number;
 };
 
 @Injectable()
 export class ReportsService {
-  constructor(private prisma: DatabaseService) {}
+  constructor(private prisma: DatabaseService) { }
 
   async contractorClaimsReport(params?: {
     dateFrom?: string;      // ISO (inclusive)
@@ -45,7 +47,8 @@ export class ReportsService {
     COALESCE(COUNT(*) FILTER (WHERE cl.status = 'REJECTED'), 0)::int                AS "REJECTED",
     COALESCE(COUNT(*) FILTER (WHERE cl.status = 'IN_EVALUATION'), 0)::int           AS "IN_EVALUATION",
     COALESCE(COUNT(*) FILTER (WHERE cl.status = 'RESOLVED'), 0)::int                AS "RESOLVED",
-    COALESCE(COUNT(*) FILTER (WHERE cl.status = 'RESOLVED_IN_COURT'), 0)::int       AS "RESOLVED_IN_COURT"
+    COALESCE(COUNT(*) FILTER (WHERE cl.status = 'RESOLVED_IN_COURT'), 0)::int       AS "RESOLVED_IN_COURT",
+    COALESCE(COUNT(*) FILTER (WHERE cl.status = 'PAYED'), 0)::int                   AS "PAYED"
   FROM contractors c
   LEFT JOIN "claims" cl
     ON cl."submittedById" = c.id
@@ -60,5 +63,53 @@ export class ReportsService {
     return rows;
   }
 
- 
+  async generateClaimReport(filters: ClaimReportQueryDto) {
+    const {
+      status,
+      claimType,
+      companyId,
+      startDate,
+      endDate,
+    } = filters;
+
+    return this.prisma.claim.findMany({
+      where: {
+        ...(status && { status }),
+        ...(claimType && { claimType }),
+        ...(companyId && { companyId }),
+        ...(startDate || endDate
+          ? {
+            submissionDate: {
+              ...(startDate && { gte: new Date(startDate) }),
+              ...(endDate && { lte: new Date(endDate) }),
+            },
+          }
+          : {}),
+      },
+      include: {
+        company: {
+          include: {
+            representatives: {
+              select: {
+                id: true,
+                name: true,
+                email: true,
+              },
+            },
+          },
+        },
+        submittedBy: {
+          select: { id: true, name: true, email: true },
+        },
+        evaluator: {
+          select: { id: true, name: true },
+        },
+      },
+      orderBy: {
+        submissionDate: 'desc',
+      },
+    });
+  }
+
+
 }

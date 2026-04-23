@@ -24,20 +24,36 @@ export class AnalyticsService {
     'IN_EVALUATION',
     'RESOLVED',
     'RESOLVED_IN_COURT',
+    'PAYED',
   ];
 
   private buildWhere(q: AnalyticsQueryDto): Prisma.ClaimWhereInput {
-    const where: Prisma.ClaimWhereInput = {};
-    if (q.from || q.to) {
-      where.submissionDate = {
-        gte: q.from ? new Date(q.from) : undefined,
-        lte: q.to ? new Date(q.to) : undefined,
-      };
-    }
-    if (q.companyId) where.companyId = q.companyId;
-    if (q.evaluatorId) where.evaluatorId = q.evaluatorId;
-    return where;
+  const where: Prisma.ClaimWhereInput = {};
+
+  // Date range
+  if (q.from || q.to) {
+    where.submissionDate = {
+      gte: q.from ? new Date(q.from) : undefined,
+      lte: q.to ? new Date(q.to) : undefined,
+    };
   }
+
+  // Company & evaluator
+  if (q.companyId) where.companyId = q.companyId;
+  if (q.evaluatorId) where.evaluatorId = q.evaluatorId;
+
+  // ✅ APPLY FILTERS HERE
+  if (q.status) {
+    where.status = q.status;
+  }
+
+  if (q.claimType) {
+    where.claimType = q.claimType;
+  }
+
+  return where;
+}
+
 
   /** Return zero-filled map for every status, plus total `all` */
   async statusCounts(where: Prisma.ClaimWhereInput): Promise<{ map: Record<string, number>; all: number }> {

@@ -5,6 +5,7 @@ import { JwtAuthGuard } from "src/auth/middlewares/jwt-auth.guard";
 import { RolesGuard } from "src/auth/middlewares/roles.guard";
 import { Roles } from "src/auth/middlewares/roles.decorator";
 import { ContractorClaimsQueryDto } from "./dtos/contractor-claims.dto";
+import { ClaimReportQueryDto } from "./dtos/ClaimReportQueryDto";
 
 @Controller("reports")
 @UseGuards(JwtAuthGuard, RolesGuard)
@@ -33,5 +34,10 @@ export class ReportsController {
     // }
 
     return res.json({ data: rows, count: rows.length });
+  }
+
+  @Get('claims')
+  getClaimReport(@Query() query: ClaimReportQueryDto) {
+    return this.reports.generateClaimReport(query);
   }
 }

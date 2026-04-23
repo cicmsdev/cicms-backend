@@ -19,8 +19,7 @@ export class InsuranceController {
   }
 
   // 🔐 Minimal list for selects: active only (companyId + name)
-  @Get('options')
-  
+  @Get('options')  
   options() {
     return this.insuranceService.listOptions();
   }

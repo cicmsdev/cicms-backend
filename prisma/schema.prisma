@@ -81,6 +81,7 @@ enum ClaimStatus {
   IN_EVALUATION
   RESOLVED
   RESOLVED_IN_COURT
+  PAYED
 }
 
 enum ClaimType {
@@ -148,6 +149,7 @@ enum DocumentType {
   POLICE_REPORT
   SITE_INSPECTION_REPORT
   LAND_OWNERSHIP_PROOF
+  PAYMENT_PROOF
 }
 
 model Document {

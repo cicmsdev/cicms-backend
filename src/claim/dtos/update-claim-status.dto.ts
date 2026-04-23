@@ -3,6 +3,7 @@ import { IsEnum, IsOptional, IsString, MaxLength } from 'class-validator';
 export enum InsuranceAllowedStatus {
   APPROVED = 'APPROVED',
   REJECTED = 'REJECTED',
+  PAYED = 'PAYED',
 }
 
 export enum EvaluatorAllowedStatus {

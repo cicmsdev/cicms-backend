@@ -40,7 +40,7 @@ export class DocumentController {
 
   @Post()
   @UseGuards(JwtAuthGuard, RolesGuard) 
-  @Roles('Contractor', 'Evaluator')                    
+  @Roles('Contractor', 'Evaluator', 'Insurance Representative')                    
   @UseInterceptors(FileInterceptor('file', { limits: { fileSize: 25 * 1024 * 1024 } }))
   @UsePipes(new ValidationPipe({ whitelist: true, transform: true }))
   async createDocument(
@@ -76,7 +76,7 @@ export class DocumentController {
   }
 
   @Patch(':documentId')                                  // <-- add this
-  @Roles('Contractor', 'Evaluator')                      // <-- restrict updates
+  @Roles('Contractor', 'Evaluator', 'Insurance Representative')                      // <-- restrict updates
   @UseInterceptors(FileInterceptor('file', { limits: { fileSize: 25 * 1024 * 1024 } }))
   @UsePipes(new ValidationPipe({ whitelist: true, transform: true }))
   async updateDocument(

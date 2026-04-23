@@ -204,116 +204,174 @@ export class InsuranceRepClaimService {
   }
 
 
-  /** Insurance: update claim status to APPROVED or REJECTED only */
+  /** Insurance: update claim status to APPROVED or REJECTED or PAYED only */
   async updateStatusAsInsurance(
-    userId: string,
-    claimId: string,
-    dto: UpdateInsuranceClaimStatusDto,
-  ) {
-    try {
-      const rep = await this.prisma.user.findUnique({
-        where: { id: userId },
-        select: { insuranceCompanyId: true },
+  userId: string,
+  claimId: string,
+  dto: UpdateInsuranceClaimStatusDto,
+) {
+  try {
+    const rep = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: { insuranceCompanyId: true },
+    });
+
+    if (!rep?.insuranceCompanyId) {
+      throw new ForbiddenException('User is not linked to an insurance company.');
+    }
+
+    //  Map DTO status → ClaimStatus
+    let next: ClaimStatus;
+    switch (dto.status) {
+      case InsuranceAllowedStatus.APPROVED:
+        next = ClaimStatus.APPROVED;
+        break;
+      case InsuranceAllowedStatus.REJECTED:
+        next = ClaimStatus.REJECTED;
+        break;
+      case InsuranceAllowedStatus.PAYED:
+        next = ClaimStatus.PAYED;
+        break;
+      default:
+        throw new BadRequestException('Invalid insurer status');
+    }
+
+    const { updated, oldStatus } = await this.prisma.$transaction(async (tx) => {
+      const claim = await tx.claim.findUnique({
+        where: { claimId },
+        select: {
+          claimId: true,
+          companyId: true,
+          status: true,
+          updatedAt: true,
+        },
       });
-      if (!rep?.insuranceCompanyId) {
-        throw new ForbiddenException('User is not linked to an insurance company.');
+
+      if (!claim) {
+        throw new NotFoundException('Claim not found.');
       }
 
-      // Map incoming insurer-allowed status to ClaimStatus
-      let next: ClaimStatus;
-      switch (dto.status) {
-        case InsuranceAllowedStatus.APPROVED:
-          next = ClaimStatus.APPROVED;
-          break;
-        case InsuranceAllowedStatus.REJECTED:
-          next = ClaimStatus.REJECTED;
-          break;
-        default:
-          throw new BadRequestException('Invalid insurer status');
+      if (claim.companyId !== rep.insuranceCompanyId) {
+        throw new ForbiddenException(
+          'You can only act on claims for your company.',
+        );
       }
 
-      const { updated, oldStatus } = await this.prisma.$transaction(async (tx) => {
-        const claim = await tx.claim.findUnique({
-          where: { claimId },
-          select: { claimId: true, companyId: true, status: true, updatedAt: true },
-        });
-        if (!claim) throw new NotFoundException('Claim not found.');
-        if (claim.companyId !== rep.insuranceCompanyId) {
-          throw new ForbiddenException('You can only act on claims for your company.');
+      // 🔒 RULE 1: PAYED IS FINAL — NO REVERT EVER
+      if (claim.status === ClaimStatus.PAYED) {
+        throw new BadRequestException(
+          'PAYED claims cannot be modified.',
+        );
+      }
+
+      // 🔒 STATUS TRANSITION RULES
+      if (next === ClaimStatus.PAYED) {
+        // PAYED → ONLY from RESOLVED
+        if (claim.status !== ClaimStatus.RESOLVED) {
+          throw new BadRequestException(
+            'Claim can only be marked as PAYED when status is RESOLVED.',
+          );
         }
 
-        // Allow transitions FROM: SUBMITTED, APPROVED, REJECTED
+        // 🔒 RULE 2: PAYMENT_PROOF REQUIRED
+        const paymentProofCount = await tx.document.count({
+          where: {
+            claimId,
+            documentType: 'PAYMENT_PROOF',
+          },
+        });
+
+        if (paymentProofCount === 0) {
+          throw new BadRequestException(
+            'Payment proof document is required before marking claim as PAYED.',
+          );
+        }
+      } else {
+        // APPROVED / REJECTED rules
         const allowedFrom = new Set<ClaimStatus>([
           ClaimStatus.SUBMITTED,
           ClaimStatus.APPROVED,
           ClaimStatus.REJECTED,
         ]);
+
         if (!allowedFrom.has(claim.status)) {
           throw new BadRequestException(
-            `Cannot change status from ${claim.status}. Allowed from: SUBMITTED, APPROVED, REJECTED.`,
+            `Cannot change status from ${claim.status}.`,
           );
         }
+      }
 
-        // If no change, return current state without writing/logging
-        if (claim.status === next) {
-          return {
-            updated: {
-              claimId: claim.claimId,
-              status: claim.status,
-              updatedAt: claim.updatedAt,
-            },
-            oldStatus: claim.status,
-          };
-        }
-
-        const updated = await tx.claim.update({
-          where: { claimId },
-          data: { status: next },
-          select: { claimId: true, status: true, updatedAt: true },
-        });
-
-        await tx.claimActivity.create({
-          data: {
-            claimId,
-            performedById: userId,
-            action: 'STATUS_UPDATE',
-            fromStatus: claim.status,
-            toStatus: next,
-            reason: dto.reason ?? null,
+      // 🔁 No-op protection
+      if (claim.status === next) {
+        return {
+          updated: {
+            claimId: claim.claimId,
+            status: claim.status,
+            updatedAt: claim.updatedAt,
           },
-        });
+          oldStatus: claim.status,
+        };
+      }
 
-        return { updated, oldStatus: claim.status };
+      // ✅ Update claim status
+      const updated = await tx.claim.update({
+        where: { claimId },
+        data: { status: next },
+        select: {
+          claimId: true,
+          status: true,
+          updatedAt: true,
+        },
       });
 
-      const changed = updated.status === next;
-
-      // 🔔 Notify all relevant parties on ANY insurer status change (approved OR rejected)
-      await this.notifications.createInsurerStatusUpdateNotifications(
-        claimId,
-        userId,
-        oldStatus,
-        next,
-        {
+      // 🧾 Audit log
+      await tx.claimActivity.create({
+        data: {
+          claimId,
+          performedById: userId,
+          action: 'STATUS_UPDATE',
+          fromStatus: claim.status,
+          toStatus: next,
           reason: dto.reason ?? null,
-          notifyClaimManagers: true,
-          scopeManagersToSameCompany: true,
         },
-      );
+      });
 
-      return { message: changed ? 'Status updated' : 'Status unchanged', data: updated };
-    } catch (error) {
-      console.error('updateStatusAsInsurance error:', error);
-      if (
-        error instanceof BadRequestException ||
-        error instanceof ForbiddenException ||
-        error instanceof NotFoundException
-      ) {
-        throw error;
-      }
-      throw new InternalServerErrorException('Failed to update status');
+      return { updated, oldStatus: claim.status };
+    });
+
+    // 🔔 Notify stakeholders
+    await this.notifications.createInsurerStatusUpdateNotifications(
+      claimId,
+      userId,
+      oldStatus,
+      updated.status,
+      {
+        reason: dto.reason ?? null,
+        notifyClaimManagers: true,
+        scopeManagersToSameCompany: true,
+      },
+    );
+
+    return {
+      message:
+        updated.status === oldStatus ? 'Status unchanged' : 'Status updated',
+      data: updated,
+    };
+  } catch (error) {
+    console.error('updateStatusAsInsurance error:', error);
+
+    if (
+      error instanceof BadRequestException ||
+      error instanceof ForbiddenException ||
+      error instanceof NotFoundException
+    ) {
+      throw error;
     }
+
+    throw new InternalServerErrorException('Failed to update status');
   }
+}
+
 
 
   /** Insurance: dashboard summary */
